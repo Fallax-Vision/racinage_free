@@ -1,0 +1,25 @@
+# Build output
+desktop/RacinageFree/dist/
+AGENTS.md
+*.log
+
+# Local editor/OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# User data must stay outside the repo
+data/
+media/
+logs/
+backups/
+updates/
+webview/
+
+# Dependency caches
+packages/
+node_modules/
+vendor/

@@ -1,0 +1,21 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet new classlib -o .deps
+          dotnet add .deps package Microsoft.Web.WebView2 --version 1.0.4022.49
+          dotnet add .deps package SQLitePCLRaw.lib.e_sqlite3 --version 2.1.6
+      - name: Build portable executable
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racinage-free.ps1
