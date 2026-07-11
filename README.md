@@ -6,15 +6,16 @@ Racinage Free is the open-source Windows portable edition of Racinage for the Li
 
 ## Download
 
-- Latest bundled release: [`RacinageFree-v0.13.0.exe`](releases/desktop/racinage-free-v0.13.0/RacinageFree-v0.13.0.exe)
-- Version: `racinage-free-v0.13.0`
-- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.13.0/checksums.txt)
+- Latest bundled release: [`RacinageFree-v0.13.1.exe`](releases/desktop/racinage-free-v0.13.1/RacinageFree-v0.13.1.exe)
+- Version: `racinage-free-v0.13.1`
+- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.13.1/checksums.txt)
 
 ## What Is Included
 
 - Native C# WinForms/WebView2 host.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- Bundled Inter variable fonts for consistent offline typography.
 - Signed online catalog for reviewed local-compatible plugins, with checksum and archive-path verification.
 - Sandboxed portable plugin pages and hosted links for optional Pro purchases and entitlements.
 - Single-file bootstrap executable with payload refresh.
@@ -41,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racina
 Output:
 
 ```text
-releases\desktop\racinage-free-v0.13.0\RacinageFree-v0.13.0.exe
+releases\desktop\racinage-free-v0.13.1\RacinageFree-v0.13.1.exe
 ```
 
 ## Local Data

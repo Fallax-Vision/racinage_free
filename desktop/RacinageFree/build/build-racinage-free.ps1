@@ -1,12 +1,13 @@
 $ErrorActionPreference = 'Stop'
 
-$version = '0.13.0'
+$version = '0.13.1'
 $appName = 'racinage-free'
 $scriptRoot = $PSScriptRoot
 $projectRoot = Resolve-Path (Join-Path $scriptRoot '..\..\..')
 $desktopRoot = Resolve-Path (Join-Path $scriptRoot '..')
 $nativeRoot = Join-Path $desktopRoot 'native-host'
 $iconFile = Join-Path $desktopRoot 'assets\racinage.ico'
+$fontRoot = Join-Path $desktopRoot 'assets\fonts\inter'
 $releaseRoot = Join-Path $projectRoot "releases\desktop\$appName-v$version"
 $buildRoot = Join-Path $desktopRoot 'dist'
 $stagingRoot = Join-Path $buildRoot 'staging'
@@ -30,7 +31,7 @@ $formsDll = Join-Path $webViewRoot 'lib\net462\Microsoft.Web.WebView2.WinForms.d
 $loaderDll = Join-Path $webViewRoot 'runtimes\win-x64\native\WebView2Loader.dll'
 $sqliteDll = Join-Path $nugetRoot 'sqlitepclraw.lib.e_sqlite3\2.1.6\runtimes\win-x64\native\e_sqlite3.dll'
 
-foreach ($required in @($coreDll, $formsDll, $loaderDll, $sqliteDll, $iconFile)) {
+foreach ($required in @($coreDll, $formsDll, $loaderDll, $sqliteDll, $iconFile, (Join-Path $fontRoot 'InterVariable.woff2'), (Join-Path $fontRoot 'InterVariable-Italic.woff2'))) {
   if (!(Test-Path -LiteralPath $required)) {
     throw "Missing build dependency: $required"
   }
@@ -60,6 +61,9 @@ Copy-Item -LiteralPath $coreDll -Destination $stagingRoot -Force
 Copy-Item -LiteralPath $formsDll -Destination $stagingRoot -Force
 Copy-Item -LiteralPath $loaderDll -Destination $stagingRoot -Force
 Copy-Item -LiteralPath $sqliteDll -Destination $stagingRoot -Force
+New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'fonts\inter') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force
+Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable-Italic.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force
 Set-Content -LiteralPath (Join-Path $stagingRoot 'config.sample.json') -Encoding UTF8 -Value @"
 {
   "app": "Racinage Free",
