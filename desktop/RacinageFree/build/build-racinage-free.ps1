@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$version = '0.12.2'
+$version = '0.13.0'
 $appName = 'racinage-free'
 $scriptRoot = $PSScriptRoot
 $projectRoot = Resolve-Path (Join-Path $scriptRoot '..\..\..')
@@ -50,6 +50,7 @@ New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 & $csc /nologo /target:winexe /platform:x64 /optimize+ /out:$hostExe `
   /win32icon:$iconFile `
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll `
+  /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
   /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs')
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $hostExe)) {
   throw 'The Racinage Free native host did not compile.'
