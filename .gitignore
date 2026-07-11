@@ -1,6 +1,7 @@
 # Build output
 desktop/RacinageFree/dist/
-AGENTS.md
+/AGENTS.md
+/plans/
 *.log
 
 # Local editor/OS files
