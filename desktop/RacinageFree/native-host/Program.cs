@@ -82,7 +82,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.13.1";
+    internal const string Version = "0.13.2";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -642,8 +642,21 @@ namespace RacinageFreeDesktop {
         foreach (PortablePluginInfo plugin in plugins) {
           Dictionary<string, string> current;
           bool isInstalled = installedBySlug.TryGetValue(plugin.slug ?? "", out current);
-          string price = plugin.pricing_type == "free" || plugin.price_cents <= 0 ? "Free" : plugin.currency + " " + (plugin.price_cents / 100.0).ToString("0.00", CultureInfo.InvariantCulture);
-          cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>" + H((plugin.name ?? "P").Substring(0, 1).ToUpperInvariant()) + "</span><div><h3>" + H(plugin.name) + "</h3><p class='plugin-meta'>" + H(plugin.version) + " - " + H(price) + "</p></div></div><p>" + H(plugin.summary) + "</p>");
+          int listPriceCents = Math.Max(0, plugin.price_cents);
+          int effectivePriceCents = plugin.effective_price_cents.HasValue ? Math.Min(listPriceCents, Math.Max(0, plugin.effective_price_cents.Value)) : listPriceCents;
+          string currency = String.IsNullOrWhiteSpace(plugin.currency) ? "USD" : plugin.currency.ToUpperInvariant();
+          string displayName = String.IsNullOrWhiteSpace(plugin.name) ? "Plugin" : plugin.name;
+          string interval = plugin.pricing_type == "subscription" ? (plugin.billing_interval == "year" ? "/year" : "/month") : "";
+          string price = plugin.pricing_type == "free" || listPriceCents <= 0 ? "Free" : currency + " " + (effectivePriceCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + interval;
+          string priceMeta = H(plugin.version) + " - ";
+          if (effectivePriceCents < listPriceCents) priceMeta += "<del>" + H(currency + " " + (listPriceCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture)) + "</del> ";
+          priceMeta += H(price);
+          if (!String.IsNullOrWhiteSpace(plugin.promotion_label)) {
+            DateTime promotionEnd;
+            string expiry = DateTime.TryParse(plugin.promotion_expires_at, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out promotionEnd) ? " until " + promotionEnd.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) : "";
+            priceMeta += "<small>" + H(plugin.promotion_label + expiry) + "</small>";
+          }
+          cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>" + H(displayName.Substring(0, 1).ToUpperInvariant()) + "</span><div><h3>" + H(displayName) + "</h3><p class='plugin-meta'>" + priceMeta + "</p></div></div><p>" + H(plugin.summary) + "</p>");
           if (plugin.local == null || !plugin.local.supported) cards.Append("<p class='notice'>Web only: " + H(plugin.local == null ? "No reviewed local runtime is available." : plugin.local.reason) + "</p>");
           else if (isInstalled) cards.Append("<div class='actions'><a class='button' href='/plugin/" + A(plugin.slug) + "'>Open</a><form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='uninstall_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button ghost' type='submit'>Uninstall</button></form></div>");
           else if ((plugin.download_url ?? "") != "") cards.Append("<form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='install_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button' type='submit'>Install</button></form>");
@@ -795,7 +808,7 @@ namespace RacinageFreeDesktop {
   internal sealed class PortableCatalogPayload { public string expires_at; public List<PortablePluginInfo> plugins; }
   internal sealed class PortableLocalSupport { public bool supported; public string reason; public string root; public string entrypoint; }
   internal sealed class PortablePluginInfo {
-    public string slug; public string name; public string summary; public string description; public string pricing_type; public int price_cents;
+    public string slug; public string name; public string summary; public string description; public string pricing_type; public int price_cents; public int? effective_price_cents; public string billing_interval; public string promotion_label; public string promotion_expires_at;
     public string currency; public string version; public string checksum_sha256; public string download_url; public string purchase_url; public PortableLocalSupport local;
   }
 
