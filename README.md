@@ -6,9 +6,9 @@ Racinage Free is the open-source Windows portable edition of Racinage for the Li
 
 ## Download
 
-- Latest bundled release: [`RacinageFree-v0.13.2.exe`](releases/desktop/racinage-free-v0.13.2/RacinageFree-v0.13.2.exe)
-- Version: `racinage-free-v0.13.2`
-- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.13.2/checksums.txt)
+- Latest bundled release: [`RacinageFree-v0.13.3.exe`](releases/desktop/racinage-free-v0.13.3/RacinageFree-v0.13.3.exe)
+- Version: `racinage-free-v0.13.3`
+- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.13.3/checksums.txt)
 
 ## What Is Included
 
@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racina
 Output:
 
 ```text
-releases\desktop\racinage-free-v0.13.2\RacinageFree-v0.13.2.exe
+releases\desktop\racinage-free-v0.13.3\RacinageFree-v0.13.3.exe
 ```
 
 ## Local Data

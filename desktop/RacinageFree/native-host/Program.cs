@@ -82,7 +82,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.13.2";
+    internal const string Version = "0.13.3";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -591,7 +591,7 @@ namespace RacinageFreeDesktop {
         "<article class='panel'><h2>Add person</h2><form method='post' action='/family'>" + CsrfInput() + "<input type='hidden' name='action' value='add_person'>" +
         "<label>Full name<input name='full_name' required></label>" +
         "<label>Relationship<input name='relationship' placeholder='Parent, cousin, child...'></label>" +
-        "<label>Birth date<input name='birth_date' placeholder='YYYY-MM-DD'></label>" +
+        "<label>Birth date<input name='birth_date' type='date'></label>" +
         "<label>Place<input name='place'></label>" +
         "<label>Notes<textarea name='notes' rows='4'></textarea></label>" +
         "<button class='button' type='submit'>Add person</button></form></article>" +
@@ -745,7 +745,7 @@ namespace RacinageFreeDesktop {
     }
 
     private static string Js() {
-      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});";
+      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});document.addEventListener('click',function(e){var p=e.target.closest&&e.target.closest('input[type=date],input[type=datetime-local],input[type=time],input[type=month],input[type=year]');if(!p||p.disabled||p.readOnly||typeof p.showPicker!=='function')return;try{p.showPicker();}catch(_){}});";
     }
 
     private static void WriteHtml(HttpListenerContext context, string html) {

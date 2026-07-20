@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$version = '0.13.2'
+$version = '0.13.3'
 $appName = 'racinage-free'
 $scriptRoot = $PSScriptRoot
 $projectRoot = Resolve-Path (Join-Path $scriptRoot '..\..\..')
