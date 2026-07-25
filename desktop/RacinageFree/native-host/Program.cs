@@ -6,6 +6,7 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -82,7 +83,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.13.3";
+    internal const string Version = "0.14.0";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -360,6 +361,7 @@ namespace RacinageFreeDesktop {
   internal sealed class LocalServer {
     private readonly LocalStore store;
     private readonly PluginCatalogClient pluginCatalog = new PluginCatalogClient();
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     private HttpListener listener;
     private Thread thread;
     private volatile bool running;
@@ -377,6 +379,7 @@ namespace RacinageFreeDesktop {
       listener = new HttpListener();
       listener.Prefixes.Add(BaseUrl + "/");
       listener.Start();
+      File.WriteAllText(Path.Combine(PortablePaths.UpdatesDir, "local-port.txt"), port.ToString(CultureInfo.InvariantCulture), Encoding.UTF8);
       running = true;
       thread = new Thread(ListenLoop);
       thread.IsBackground = true;
@@ -424,6 +427,7 @@ namespace RacinageFreeDesktop {
         if (path == "/start-free") { StartFree(context); return; }
         if (path == "/family") { Family(context); return; }
         if (path == "/manage" || path == "/manage/plugins" || path == "/manage/family" || path == "/manage/settings") { Manage(context, path); return; }
+        if (path == "/local-plugin-api/finance-manager") { LocalPluginApi(context, "finance-manager"); return; }
         if (path.StartsWith("/plugin/", StringComparison.OrdinalIgnoreCase)) { PortablePlugin(context, path.Substring(8)); return; }
         if (path == "/logout") { store.ClearSession(); ExpireCookie(context); Redirect(context, "/"); return; }
         WriteHtml(context, Home(context));
@@ -610,7 +614,10 @@ namespace RacinageFreeDesktop {
         string action = form.ContainsKey("action") ? form["action"] : "";
         string slug = form.ContainsKey("slug") ? form["slug"] : "";
         if (action == "install_plugin") message = pluginCatalog.Install(slug, store);
-        else if (action == "uninstall_plugin") { store.UninstallPlugin(slug); message = "Plugin uninstalled. Its local data was kept."; }
+        else if (action == "hide_plugin") { store.SetPluginStatus(slug, "hidden"); message = "Plugin hidden. Its local data and attachments were kept."; }
+        else if (action == "enable_plugin") { store.SetPluginStatus(slug, "enabled"); message = "Plugin enabled."; }
+        else if (action == "uninstall_plugin") { store.SetPluginStatus(slug, "hidden"); message = "Plugin hidden. Its local data was kept."; }
+        else if (action == "save_currency_settings") { store.SaveCurrencySettings(form.ContainsKey("display_currency")?form["display_currency"]:"USD",form.ContainsKey("currency_rates")?form["currency_rates"]:"");message="Currency settings saved."; }
       }
       WriteHtml(context, ManagePage(path, message));
     }
@@ -624,7 +631,8 @@ namespace RacinageFreeDesktop {
         Dictionary<string, string> family = store.GetFamily();
         content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family records</a></div><dl class='facts'><div><dt>Name</dt><dd>" + H(family["name"]) + "</dd></div><div><dt>Location</dt><dd>" + H(family["location"] == "" ? "Not set" : family["location"]) + "</dd></div></dl></section>";
       } else if (active == "settings") {
-        content = "<section class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></section>";
+        List<Dictionary<string,string> > rates=store.GetCurrencyRates();string selected=store.GetDisplayCurrency();StringBuilder options=new StringBuilder(),lines=new StringBuilder();foreach(Dictionary<string,string> rate in rates){options.Append("<option value='"+A(rate["code"])+"'"+(rate["code"]==selected?" selected":"")+">"+H(rate["code"]+" - "+rate["name"])+"</option>");lines.Append(rate["code"]+" | "+rate["name"]+" | "+rate["rate"]+"\r\n");}
+        content = "<section class='manage-grid'><article class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></article><article class='manage-card'><h2>Currency localisation</h2><p>Finance Manager uses this account display currency. Rates are entered as the amount of each currency equal to 1 USD.</p><form method='post' action='/manage/settings'>"+CsrfInput()+"<input type='hidden' name='action' value='save_currency_settings'><label>Display currency<select name='display_currency'>"+options+"</select></label><label>Offline currency rates<textarea name='currency_rates' rows='8' spellcheck='false'>"+H(lines.ToString())+"</textarea></label><small>One per line: CODE | Name | rate. USD must remain 1.</small><button class='button' type='submit'>Save currency settings</button></form></article></section>";
       } else {
         content = "<section class='manage-grid'><article class='manage-card'><h2>Local account</h2><p>One local user owns this device's family records. Collaborative members and invitations are intentionally unavailable.</p><a class='button ghost' href='/family'>Open dashboard</a></article><article class='manage-card'><h2>Plan</h2><p>Lite Free limits apply to local features. Reviewed plugins can add Free features, while optional Pro features are purchased through the publisher's hosted Racinage page.</p><a class='button' href='" + PortablePaths.PricingUrl + "'>View Racinage plans</a></article></section>";
       }
@@ -637,9 +645,11 @@ namespace RacinageFreeDesktop {
       Dictionary<string, Dictionary<string, string> > installedBySlug = new Dictionary<string, Dictionary<string, string> >(StringComparer.OrdinalIgnoreCase);
       foreach (Dictionary<string, string> row in installed) installedBySlug[row["slug"]] = row;
       StringBuilder cards = new StringBuilder();
+      Dictionary<string,string> financeInstall;if(installedBySlug.TryGetValue("finance-manager",out financeInstall)){bool financeEnabled=financeInstall["status"]=="enabled";cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>F</span><div><h3>Finance Manager</h3><p class='plugin-meta'>1.0.0 - bundled</p></div></div><p>Offline personal accounts, transactions, budgets, goals, debts, investments, forecasts, reports, attachments, and circles.</p><div class='actions'>"+(financeEnabled?"<a class='button' href='/plugin/finance-manager'>Open</a>":"")+"<form method='post' action='/manage/plugins'>"+CsrfInput()+"<input type='hidden' name='action' value='"+(financeEnabled?"hide_plugin":"enable_plugin")+"'><input type='hidden' name='slug' value='finance-manager'><button class='button ghost' type='submit'>"+(financeEnabled?"Hide":"Enable")+"</button></form></div></article>");}
       try {
         List<PortablePluginInfo> plugins = pluginCatalog.GetPlugins();
         foreach (PortablePluginInfo plugin in plugins) {
+          if(String.Equals(plugin.slug,"finance-manager",StringComparison.OrdinalIgnoreCase))continue;
           Dictionary<string, string> current;
           bool isInstalled = installedBySlug.TryGetValue(plugin.slug ?? "", out current);
           int listPriceCents = Math.Max(0, plugin.price_cents);
@@ -658,7 +668,7 @@ namespace RacinageFreeDesktop {
           }
           cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>" + H(displayName.Substring(0, 1).ToUpperInvariant()) + "</span><div><h3>" + H(displayName) + "</h3><p class='plugin-meta'>" + priceMeta + "</p></div></div><p>" + H(plugin.summary) + "</p>");
           if (plugin.local == null || !plugin.local.supported) cards.Append("<p class='notice'>Web only: " + H(plugin.local == null ? "No reviewed local runtime is available." : plugin.local.reason) + "</p>");
-          else if (isInstalled) cards.Append("<div class='actions'><a class='button' href='/plugin/" + A(plugin.slug) + "'>Open</a><form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='uninstall_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button ghost' type='submit'>Uninstall</button></form></div>");
+          else if (isInstalled) cards.Append("<div class='actions'><a class='button' href='/plugin/" + A(plugin.slug) + "'>Open</a><form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='hide_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button ghost' type='submit'>Hide</button></form></div>");
           else if ((plugin.download_url ?? "") != "") cards.Append("<form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='install_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button' type='submit'>Install</button></form>");
           if (plugin.pricing_type != "free" && plugin.price_cents > 0) cards.Append("<p><a href='" + A(plugin.purchase_url) + "'>Buy or manage Pro access on Racinage</a></p>");
           cards.Append("</article>");
@@ -675,8 +685,31 @@ namespace RacinageFreeDesktop {
       string entrypoint = store.PluginEntrypoint(slug);
       if (entrypoint == "" || !File.Exists(entrypoint)) { WriteHtml(context, Page("Plugin unavailable", "<section class='panel'><h1>Plugin unavailable</h1><p>This local plugin is missing or disabled.</p><a class='button' href='/manage/plugins'>Back to plugins</a></section>"), 404); return; }
       string source = File.ReadAllText(entrypoint, Encoding.UTF8);
-      string body = "<section class='manage-head'><div><p class='kicker'>Local plugin</p><h1>" + H(slug) + "</h1><p>Runs in an isolated frame without access to family records unless a future reviewed host capability explicitly grants it.</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' sandbox='allow-scripts allow-forms' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
+      string root = Path.GetDirectoryName(entrypoint);
+      string cssPath = Path.Combine(root, "app.css"), jsPath = Path.Combine(root, "app.js");
+      if (File.Exists(cssPath)) source = source.Replace("<link rel=\"stylesheet\" href=\"app.css\">", "<style>" + File.ReadAllText(cssPath, Encoding.UTF8) + "</style>");
+      if (File.Exists(jsPath)) source = source.Replace("<script src=\"app.js\"></script>", "<script>" + File.ReadAllText(jsPath, Encoding.UTF8).Replace("</script>", "<\\/script>") + "</script>");
+      string bridgeToken = RandomToken(32);
+      source = source.Replace("{{FINANCE_BRIDGE_TOKEN}}", bridgeToken);
+      string body = "<section class='manage-head plugin-shell-head'><div><p class='kicker'>Local plugin</p><h1>Finance Manager</h1><p>Private local finance records remain available without internet access.</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' data-plugin-slug='" + A(slug) + "' data-bridge-token='" + A(bridgeToken) + "' sandbox='allow-scripts allow-forms allow-downloads allow-modals' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
       WriteHtml(context, Page(slug, body));
+    }
+
+    private void LocalPluginApi(HttpListenerContext context, string slug) {
+      if (!IsAuthenticated(context) || context.Request.HttpMethod != "POST" || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])) { WriteJson(context, "{\"ok\":false,\"message\":\"The local session is unavailable.\"}", 403); return; }
+      if (context.Request.ContentLength64 < 1 || context.Request.ContentLength64 > 40L * 1024L * 1024L) { WriteJson(context, "{\"ok\":false,\"message\":\"The finance request is too large.\"}", 413); return; }
+      try {
+        string body;
+        using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+        Dictionary<string, object> request = json.Deserialize<Dictionary<string, object> >(body);
+        string action = request != null && request.ContainsKey("action") ? Convert.ToString(request["action"], CultureInfo.InvariantCulture) : "";
+        Dictionary<string, object> payload = request != null && request.ContainsKey("payload") ? request["payload"] as Dictionary<string, object> : null;
+        object result = store.LocalPluginAction(slug, action, payload ?? new Dictionary<string, object>());
+        WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", true }, { "result", result } }), 200);
+      } catch (Exception error) {
+        Program.Log("Local Finance bridge error: " + error.Message);
+        WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", false }, { "message", error.Message } }), 400);
+      }
     }
 
     private static string ManageTab(string href, string label, bool active) {
@@ -721,7 +754,7 @@ namespace RacinageFreeDesktop {
       return Uri.UnescapeDataString(value.Replace("+", " "));
     }
 
-    private static string Page(string title, string body) {
+    private string Page(string title, string body) {
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
         "<title>" + H(title) + " - Racinage Free</title><style>" + Css() + "</style></head><body>" +
         "<header><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
@@ -744,8 +777,8 @@ namespace RacinageFreeDesktop {
 *{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Tahoma,sans-serif;background:#f8fbfc;color:var(--text)}a{color:#007584;text-decoration:none}header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:5}.brand{font-weight:800;color:var(--brand)}nav{display:flex;gap:16px;align-items:center}nav a{font-size:14px;font-weight:600;color:var(--muted)}main{max-width:1120px;margin:0 auto;padding:34px 24px 70px}.hero{min-height:360px;display:grid;align-items:center;border-bottom:1px solid var(--line)}.hero h1,.dashhead h1,.manage-head h1{font-size:48px;line-height:1.02;margin:6px 0 16px;color:var(--brand)}.hero p,.dashhead p,.manage-head p,.note{font-size:17px;line-height:1.6;max-width:760px;color:var(--muted)}.kicker{font-size:12px!important;text-transform:uppercase;letter-spacing:.14em;color:var(--accent)!important;font-weight:800;margin:0}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px}.actions form{display:block}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--brand);background:var(--brand);color:#fff;font:700 14px/1 inherit;cursor:pointer}.button.ghost{background:transparent;color:var(--brand);border-color:#9ab2b8}.grid,.manage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:28px}.grid article,.panel,.manage-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}.grid h2,.panel h2,.manage-card h2{margin:0 0 10px;color:var(--brand)}.grid p,.panel p,.manage-card p{line-height:1.55;color:var(--muted)}.narrow{max-width:460px;margin:30px auto}.wide{margin-top:18px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dashhead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}form{display:grid;gap:12px}label{display:grid;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}input,textarea{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfdfd;color:var(--text)}textarea{resize:vertical}.error{border:1px solid #efb5b5;background:#fff2f2;color:#9b2525;border-radius:8px;padding:10px 12px}.sharebar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}.share{border:1px solid #cddbe0;background:#f4faff;border-radius:8px;padding:8px 11px;cursor:pointer;font-weight:700;color:var(--brand)}.people{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.people article{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfdfd}.people strong{display:block;color:var(--brand)}.people span{display:block;color:var(--accent);font-size:12px;font-weight:800;text-transform:uppercase;margin-top:3px}.people p{margin:8px 0 0;font-size:14px}.textbtn{border:0;background:transparent;color:#b93333;padding:8px 0 0;cursor:pointer;font-weight:700}.empty{margin:0}.modal{position:fixed;inset:0;background:rgba(5,21,25,.55);display:grid;place-items:center;padding:24px;z-index:20}.modal[hidden]{display:none}.modalbox{width:min(440px,100%);background:#fff;border-radius:12px;padding:24px;border:1px solid var(--line)}.modalbox h2{margin:0 0 10px;color:var(--brand)}.panelhead,.manage-card-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.panelhead h2,.panelhead p,.manage-card-head h2,.manage-card-head p{margin:0}.manage-head{margin-bottom:22px}.manage-tabs{display:flex;gap:6px;overflow:auto;padding:5px;border:1px solid var(--line);border-radius:10px;background:#fff}.manage-tabs a{min-height:42px;display:inline-flex;align-items:center;padding:0 16px;border-radius:7px;font-weight:700;color:var(--muted)}.manage-tabs a.active{color:#fff;background:var(--brand)}.manage-content{margin-top:18px}.manage-grid{margin-top:0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:18px 0 0}.facts div{padding:12px;border:1px solid var(--line);border-radius:9px}.facts dt{font-size:12px;color:var(--muted)}.facts dd{margin:5px 0 0;color:var(--brand);font-weight:700}.plugin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:18px}.plugin-card{display:flex;flex-direction:column;min-height:260px;padding:16px;border:1px solid var(--line);border-radius:10px;background:#fbfdfd}.plugin-card-top{display:flex;gap:11px;align-items:center}.plugin-card h3{margin:0;color:var(--brand)}.plugin-card>p{flex:1}.plugin-mark{width:44px;height:44px;display:grid;place-items:center;border-radius:9px;color:#fff;background:var(--brand);font-size:20px;font-weight:800}.plugin-meta{margin:4px 0 0!important;font-size:12px}.notice{padding:10px;border-left:3px solid var(--accent);background:#fff8ef;font-size:13px}.status-pill{padding:7px 10px;border-radius:999px;color:var(--brand);background:#e9f3ef;font-size:12px;font-weight:800}.plugin-frame{width:100%;min-height:620px;border:1px solid var(--line);border-radius:12px;background:#fff}@media(max-width:760px){header{padding:0 16px}nav{gap:10px}.hero h1,.dashhead h1,.manage-head h1{font-size:36px}.layout{grid-template-columns:1fr}.dashhead,.manage-card-head{display:block}.manage-card-head .button,.manage-card-head .status-pill{margin-top:12px}}";
     }
 
-    private static string Js() {
-      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});document.addEventListener('click',function(e){var p=e.target.closest&&e.target.closest('input[type=date],input[type=datetime-local],input[type=time],input[type=month],input[type=year]');if(!p||p.disabled||p.readOnly||typeof p.showPicker!=='function')return;try{p.showPicker();}catch(_){}});";
+    private string Js() {
+      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});document.addEventListener('click',function(e){var p=e.target.closest&&e.target.closest('input[type=date],input[type=datetime-local],input[type=time],input[type=month],input[type=year]');if(!p||p.disabled||p.readOnly||typeof p.showPicker!=='function')return;try{p.showPicker();}catch(_){}});window.addEventListener('message',async function(e){var f=document.querySelector('.plugin-frame[data-bridge-token]'),m=e.data;if(!f||e.source!==f.contentWindow||!m||!m.financeBridge||m.slug!==f.dataset.pluginSlug||m.bridgeToken!==f.dataset.bridgeToken)return;var reply={financeBridgeResponse:true,bridgeToken:f.dataset.bridgeToken,requestId:m.requestId,ok:false};try{var r=await fetch('/local-plugin-api/'+encodeURIComponent(m.slug),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Racinage-CSRF':'" + A(store.CsrfToken) + "'},body:JSON.stringify({action:m.action,payload:m.payload||{}})}),j=await r.json();reply.ok=!!j.ok;reply.result=j.result;reply.message=j.message;}catch(_){reply.message='The local finance service could not complete the request.';}f.contentWindow.postMessage(reply,'*');});";
     }
 
     private static void WriteHtml(HttpListenerContext context, string html) {
@@ -773,7 +806,12 @@ namespace RacinageFreeDesktop {
     }
 
     private static void WriteJson(HttpListenerContext context, string json) {
+      WriteJson(context, json, 200);
+    }
+
+    private static void WriteJson(HttpListenerContext context, string json, int status) {
       byte[] bytes = Encoding.UTF8.GetBytes(json);
+      context.Response.StatusCode = status;
       context.Response.ContentType = "application/json; charset=utf-8";
       context.Response.ContentLength64 = bytes.Length;
       context.Response.OutputStream.Write(bytes, 0, bytes.Length);
@@ -801,6 +839,12 @@ namespace RacinageFreeDesktop {
 
     private static string A(string value) {
       return H(value);
+    }
+
+    private static string RandomToken(int bytes) {
+      byte[] value = new byte[bytes];
+      using (RNGCryptoServiceProvider random = new RNGCryptoServiceProvider()) random.GetBytes(value);
+      return BitConverter.ToString(value).Replace("-", "").ToLowerInvariant();
     }
   }
 
@@ -919,6 +963,7 @@ namespace RacinageFreeDesktop {
 
   internal sealed class LocalStore {
     private static readonly byte[] TokenEntropy = Encoding.UTF8.GetBytes("Racinage Free local token v1");
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     private readonly string dbPath = Path.Combine(PortablePaths.DataDir, "racinage-free.sqlite");
     private string deviceId;
     private string csrfToken;
@@ -949,10 +994,214 @@ namespace RacinageFreeDesktop {
         db.Exec("CREATE TABLE IF NOT EXISTS media_baselines (relative_path TEXT PRIMARY KEY, sha256 TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)");
         db.Exec("CREATE TABLE IF NOT EXISTS media_deletes (relative_path TEXT PRIMARY KEY, deleted_at TEXT NOT NULL, origin_device TEXT NOT NULL)");
         db.Exec("CREATE TABLE IF NOT EXISTS plugin_installs (slug TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, checksum_sha256 TEXT NOT NULL, entrypoint TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'enabled', installed_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+        if (!HasColumn(db, "users", "display_currency")) db.Exec("ALTER TABLE users ADD COLUMN display_currency TEXT NOT NULL DEFAULT 'USD'");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_currency_rates (code TEXT PRIMARY KEY, name TEXT NOT NULL, rate REAL NOT NULL CHECK(rate > 0), updated_at TEXT NOT NULL)");
+        db.Exec("INSERT OR IGNORE INTO local_currency_rates(code,name,rate,updated_at)VALUES('USD','United States Dollar',1,'" + Now() + "')");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_records (slug TEXT NOT NULL,record_type TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL DEFAULT '',data_json TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,record_type,long_id))");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_records ON local_plugin_records(slug,workspace_long_id,record_type,status)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_attachments (slug TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL,transaction_long_id TEXT NOT NULL,relative_path TEXT NOT NULL,original_name TEXT NOT NULL,mime_type TEXT NOT NULL,file_size INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,long_id))");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_attachments ON local_plugin_attachments(slug,transaction_long_id,status)");
       }
+      EnsureBuiltinFinanceManager();
       ProtectDatabaseFile();
       GetOrCreateProtectedToken("device.token");
     }
+
+    private static bool HasColumn(SqliteDb db,string table,string column) {
+      foreach(Dictionary<string,string> row in db.Query("PRAGMA table_info("+table+")"))if(String.Equals(row["name"],column,StringComparison.OrdinalIgnoreCase))return true;return false;
+    }
+
+    private void EnsureBuiltinFinanceManager() {
+      string source=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"plugins","finance-manager"),destination=Path.Combine(PortablePaths.PluginsDir,"finance-manager","1.0.0");
+      if(!Directory.Exists(source))return;
+      Directory.CreateDirectory(destination);
+      foreach(string file in Directory.GetFiles(source,"*",SearchOption.AllDirectories)){
+        string relative=file.Substring(source.Length).TrimStart(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+        string output=Path.GetFullPath(Path.Combine(destination,relative));
+        if(!output.StartsWith(Path.GetFullPath(destination)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))continue;
+        Directory.CreateDirectory(Path.GetDirectoryName(output));File.Copy(file,output,true);
+      }
+      string checksum=HashDirectory(destination),now=Now();
+      using(SqliteDb db=Open()){
+        Dictionary<string,string> row=db.QueryOne("SELECT status,installed_at FROM plugin_installs WHERE slug='finance-manager' LIMIT 1");
+        if(row==null)db.Execute("INSERT INTO plugin_installs(slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at)VALUES('finance-manager','Finance Manager','1.0.0',?,'index.html','enabled',?,?)",checksum,now,now);
+        else db.Execute("UPDATE plugin_installs SET name='Finance Manager',version='1.0.0',checksum_sha256=?,entrypoint='index.html',updated_at=? WHERE slug='finance-manager'",checksum,now);
+      }
+    }
+
+    private static string HashDirectory(string root) {
+      using(SHA256 sha=SHA256.Create()){
+        foreach(string file in Directory.GetFiles(root,"*",SearchOption.AllDirectories).OrderBy(value=>value,StringComparer.OrdinalIgnoreCase)){
+          byte[] name=Encoding.UTF8.GetBytes(file.Substring(root.Length).Replace('\\','/').ToLowerInvariant()),content=File.ReadAllBytes(file);
+          sha.TransformBlock(name,0,name.Length,null,0);sha.TransformBlock(content,0,content.Length,null,0);
+        }
+        sha.TransformFinalBlock(new byte[0],0,0);return BitConverter.ToString(sha.Hash).Replace("-","").ToLowerInvariant();
+      }
+    }
+
+    internal object LocalPluginAction(string slug,string action,Dictionary<string,object> payload) {
+      if(slug!="finance-manager")throw new InvalidOperationException("This local plugin namespace is not available.");
+      if(action=="bootstrap")return FinanceBootstrap(slug);
+      if(action=="save")return FinanceSave(slug,payload);
+      if(action=="batch_save")return FinanceBatchSave(slug,payload);
+      if(action=="delete")return FinanceDelete(slug,payload);
+      if(action=="settings")return FinanceSettings(payload);
+      if(action=="attachment_upload")return FinanceAttachmentUpload(slug,payload);
+      if(action=="attachment_get")return FinanceAttachmentGet(slug,payload);
+      if(action=="attachment_delete")return FinanceAttachmentDelete(slug,payload);
+      throw new InvalidOperationException("Unknown local finance action.");
+    }
+
+    private object FinanceBootstrap(string slug) {
+      using(SqliteDb db=Open()){
+        List<Dictionary<string,object> > records=new List<Dictionary<string,object> >();
+        foreach(Dictionary<string,string> row in db.Query("SELECT record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at FROM local_plugin_records WHERE slug=? AND status!='deleted' ORDER BY created_at,long_id",slug)){
+          Dictionary<string,object> item=new Dictionary<string,object>();foreach(KeyValuePair<string,string> pair in row)item[pair.Key]=pair.Value;item["version"]=ToInt(row["version"]);item["data"]=json.DeserializeObject(row["data_json"]);item.Remove("data_json");records.Add(item);
+        }
+        List<Dictionary<string,object> > attachments=new List<Dictionary<string,object> >();
+        foreach(Dictionary<string,string> row in db.Query("SELECT long_id,workspace_long_id,transaction_long_id,original_name,mime_type,file_size,version,status,created_at FROM local_plugin_attachments WHERE slug=? AND status!='deleted' ORDER BY created_at",slug)){Dictionary<string,object> item=new Dictionary<string,object>();foreach(KeyValuePair<string,string> pair in row)item[pair.Key]=pair.Value;item["file_size"]=ToLong(row["file_size"]);item["version"]=ToInt(row["version"]);attachments.Add(item);}
+        Dictionary<string,string> user=db.QueryOne("SELECT display_currency FROM users WHERE id=1 LIMIT 1");
+        List<Dictionary<string,object> > currencies=new List<Dictionary<string,object> >();foreach(Dictionary<string,string> row in db.Query("SELECT code,name,rate FROM local_currency_rates ORDER BY CASE code WHEN 'USD' THEN 0 ELSE 1 END,code"))currencies.Add(new Dictionary<string,object>{{"code",row["code"]},{"name",row["name"]},{"rate",ToDouble(row["rate"])}});
+        return new Dictionary<string,object>{{"records",records},{"attachments",attachments},{"currencies",currencies},{"display_currency",user==null?"USD":user["display_currency"]},{"quotas",FinanceQuotas()}};
+      }
+    }
+
+    private static Dictionary<string,object> FinanceQuotas() {
+      return new Dictionary<string,object>{{"workspaces",1},{"accounts",8},{"transactions",2500},{"budgets",5},{"goals",5},{"debts",5},{"investment_accounts",1},{"investments",25},{"scenarios",1},{"circles",3},{"circle_members",25},{"circle_entries",1000},{"attachments_per_transaction",20}};
+    }
+
+    private object FinanceSave(string slug,Dictionary<string,object> payload) {
+      using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{Dictionary<string,object> result=FinanceSaveRecord(db,slug,payload);db.Exec("COMMIT");ProtectDatabaseFile();return result;}catch{db.Exec("ROLLBACK");throw;}}
+    }
+
+    private object FinanceBatchSave(string slug,Dictionary<string,object> payload) {
+      object raw;if(!payload.TryGetValue("records",out raw))throw new InvalidOperationException("No finance records were supplied.");
+      object[] rows=raw as object[];if(rows==null||rows.Length>5000)throw new InvalidOperationException("The finance batch is invalid or too large.");
+      int added=0,duplicates=0,invalid=0,quota=0;string sampleWorkspace="";
+      using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{
+        List<Dictionary<string,object> > transfers=new List<Dictionary<string,object> >();
+        foreach(object value in rows){Dictionary<string,object> record=value as Dictionary<string,object>;if(record==null){invalid++;continue;}try{Dictionary<string,object> result=FinanceSaveRecord(db,slug,record);if(Convert.ToBoolean(result["duplicate"],CultureInfo.InvariantCulture))duplicates++;else added++;if(Convert.ToString(record.ContainsKey("record_type")?record["record_type"]:"",CultureInfo.InvariantCulture)=="workspaces"&&sampleWorkspace=="")sampleWorkspace=Convert.ToString(result["long_id"],CultureInfo.InvariantCulture);Dictionary<string,object> rowData=GetObject(record,"data");if(rowData.ContainsKey("transfer_group"))transfers.Add(record);}catch(InvalidDataException){invalid++;}catch(InvalidOperationException exception){if(exception.Message.IndexOf("limit",StringComparison.OrdinalIgnoreCase)>=0||exception.Message.IndexOf("allows",StringComparison.OrdinalIgnoreCase)>=0)quota++;else throw;}}
+        if(transfers.Count>0)ValidateTransferBatch(transfers);
+        if(payload.ContainsKey("sample")&&ToBool(payload["sample"])&&sampleWorkspace!="")SeedFinanceSample(db,slug,sampleWorkspace);
+        db.Exec("COMMIT");
+      }catch{db.Exec("ROLLBACK");throw;}}
+      ProtectDatabaseFile();return new Dictionary<string,object>{{"added",added},{"duplicates",duplicates},{"invalid",invalid},{"quota",quota},{"workspace_long_id",sampleWorkspace}};
+    }
+
+    private Dictionary<string,object> FinanceSaveRecord(SqliteDb db,string slug,Dictionary<string,object> payload) {
+      string type=SafeType(GetString(payload,"record_type")),longId=SafeLongId(GetString(payload,"long_id")),workspace=SafeLongId(GetString(payload,"workspace_long_id"));Dictionary<string,object> values=GetObject(payload,"data");
+      if(!FinanceRecordTypes.Contains(type))throw new InvalidDataException("Unknown finance record type.");
+      string encoded=json.Serialize(values);if(encoded.Length<2||encoded.Length>65536)throw new InvalidDataException("A finance record is invalid or too large.");
+      bool editing=longId!="";Dictionary<string,string> current=editing?db.QueryOne("SELECT version,status FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? LIMIT 1",slug,type,longId):null;
+      if(editing&&current==null)throw new InvalidOperationException("The finance record no longer exists.");
+      if(editing&&ToInt(current["version"])!=GetInt(payload,"version"))throw new InvalidOperationException("This finance record changed in another window. Reopen it and try again.");
+      if(type=="workspaces")workspace="";else if(workspace==""||db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='workspaces' AND long_id=? AND status='active' LIMIT 1",slug,workspace)==null)throw new InvalidDataException("The finance workspace is unavailable.");
+      ValidateFinanceData(db,slug,type,workspace,values,editing?longId:"");
+      if(!editing)EnforceFinanceQuota(db,slug,type,workspace,values);
+      if(type=="transactions"&&values.ContainsKey("fingerprint")&&GetString(values,"fingerprint")!=""){
+        Dictionary<string,string> duplicate=db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='transactions' AND workspace_long_id=? AND status='active' AND json_extract(data_json,'$.fingerprint')=? AND long_id!=? LIMIT 1",slug,workspace,GetString(values,"fingerprint"),longId);
+        if(duplicate!=null)return new Dictionary<string,object>{{"long_id",duplicate["long_id"]},{"duplicate",true}};
+      }
+      string now=Now();if(!editing){longId=NewLongId(type);db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,type,longId,workspace,encoded,now,now);}
+      else db.Execute("UPDATE local_plugin_records SET data_json=?,version=version+1,status='active',updated_at=? WHERE slug=? AND record_type=? AND long_id=?",encoded,now,slug,type,longId);
+      return new Dictionary<string,object>{{"long_id",longId},{"version",editing?GetInt(payload,"version")+1:1},{"duplicate",false}};
+    }
+
+    private static readonly HashSet<string> FinanceRecordTypes=new HashSet<string>(StringComparer.Ordinal){"workspaces","accounts","transactions","recurring_rules","budgets","goals","debts","debt_payments","investments","scenarios","circles","circle_members","circle_entries"};
+    private static string SafeType(string value){return String.IsNullOrEmpty(value)?"":value.Replace("-","_");}
+    private static string SafeLongId(string value){if(String.IsNullOrEmpty(value))return "";if(value.Length>80)throw new InvalidDataException("A finance identifier is too long.");foreach(char c in value)if(!Char.IsLetterOrDigit(c)&&c!='_'&&c!='-')throw new InvalidDataException("A finance identifier is invalid.");return value;}
+    private static string NewLongId(string type){return "local_"+type.TrimEnd('s')+"_"+Guid.NewGuid().ToString("N");}
+
+    private void EnforceFinanceQuota(SqliteDb db,string slug,string type,string workspace,Dictionary<string,object> values) {
+      int limit=-1;if(type=="workspaces")limit=1;else if(type=="accounts")limit=8;else if(type=="transactions")limit=2500;else if(type=="budgets"||type=="goals"||type=="debts")limit=5;else if(type=="investments")limit=25;else if(type=="scenarios")limit=1;else if(type=="circles")limit=3;else if(type=="circle_entries")limit=1000;
+      if(limit>=0&&ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND record_type=? AND status='active'",slug,type))>=limit)throw new InvalidOperationException("The Lite finance "+type.Replace('_',' ')+" limit has been reached.");
+      if(type=="accounts"&&GetString(values,"account_type")=="investment"&&ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND record_type='accounts' AND status='active' AND json_extract(data_json,'$.account_type')='investment'",slug))>=1)throw new InvalidOperationException("Lite allows one investment account.");
+      if(type=="circle_members"){
+        string circle=GetString(values,"circle");if(ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND record_type='circle_members' AND workspace_long_id=? AND status='active' AND json_extract(data_json,'$.circle')=?",slug,workspace,circle))>=25)throw new InvalidOperationException("A Lite circle allows 25 people.");
+      }
+    }
+
+    private void ValidateFinanceData(SqliteDb db,string slug,string type,string workspace,Dictionary<string,object> values,string longId) {
+      if(new[]{"workspaces","accounts","recurring_rules","budgets","goals","debts","investments","scenarios","circles","circle_members"}.Contains(type)){string name=GetString(values,"name").Trim();if(name==""||name.Length>190)throw new InvalidDataException("A finance name is required.");}
+      if(type=="workspaces")ValidateCurrency(db,values);
+      if(type=="accounts"){
+        string accountType=GetString(values,"account_type");if(!new[]{"cash","checking","savings","mobile_money","credit_card","loan","investment","other_asset","other_liability"}.Contains(accountType))throw new InvalidDataException("The account type is invalid.");ValidateCurrency(db,values);ValidateSnapshot(values,"opening_cents","opening_usd_cents");
+        if(accountType=="investment"&&ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND record_type='accounts' AND status='active' AND json_extract(data_json,'$.account_type')='investment' AND long_id!=?",slug,longId))>=1)throw new InvalidDataException("Lite allows one investment account.");
+      }
+      if(type=="transactions"||type=="recurring_rules"){
+        string transactionType=GetString(values,"transaction_type");if(type=="transactions"&&!new[]{"income","expense","transfer_in","transfer_out"}.Contains(transactionType))throw new InvalidDataException("The transaction type is invalid.");if(type=="recurring_rules"&&!new[]{"income","expense"}.Contains(transactionType))throw new InvalidDataException("The recurring type is invalid.");
+        long native=GetLong(values,"amount_cents"),usd=GetLong(values,"amount_usd_cents");if(native<=0||usd<=0)throw new InvalidDataException("The finance amount must be positive.");ValidateCurrency(db,values);ValidateSnapshot(values,"amount_cents","amount_usd_cents");
+        string account=SafeLongId(GetString(values,"account"));if(db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='accounts' AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,account,workspace)==null)throw new InvalidDataException("The selected account is unavailable.");
+        string date=GetString(values,type=="transactions"?"transaction_date":"next_date");if(!ValidDate(date))throw new InvalidDataException("Choose a valid calendar date.");
+        if(type=="recurring_rules"&&!new[]{"weekly","monthly","quarterly","yearly"}.Contains(GetString(values,"frequency")))throw new InvalidDataException("The recurring frequency is invalid.");
+        if(type=="transactions"&&transactionType.StartsWith("transfer_",StringComparison.Ordinal)){RequireReference(db,slug,workspace,"accounts",GetString(values,"destination_account"));if(GetString(values,"destination_account")==account||GetString(values,"transfer_group")=="")throw new InvalidDataException("A transfer needs two accounts and one group.");}
+        if(type=="transactions"&&values.ContainsKey("splits")){object[] splits=values["splits"] as object[];if(splits!=null&&splits.Length>0){long total=0;foreach(object splitValue in splits){Dictionary<string,object> split=splitValue as Dictionary<string,object>;if(split==null||GetString(split,"category").Trim()==""||GetLong(split,"amount_cents")<=0)throw new InvalidDataException("A split transaction row is invalid.");total+=GetLong(split,"amount_cents");}if(total!=native)throw new InvalidDataException("Split amounts must equal the transaction amount.");}}
+      }
+      if(type=="budgets"){ValidateCurrency(db,values);ValidateSnapshot(values,"planned_cents","planned_usd_cents");if(!ValidDate(GetString(values,"start_date")))throw new InvalidDataException("Choose a valid budget date.");}
+      if(type=="goals"){ValidateCurrency(db,values);ValidateSnapshot(values,"target_cents","target_usd_cents");ValidateSnapshot(values,"current_cents","current_usd_cents");string date=GetString(values,"target_date");if(date!=""&&!ValidDate(date))throw new InvalidDataException("Choose a valid goal date.");}
+      if(type=="debts"){ValidateCurrency(db,values);ValidateSnapshot(values,"balance_cents","balance_usd_cents");ValidateSnapshot(values,"original_cents","original_usd_cents");if(GetLong(values,"apr_bps")<0)throw new InvalidDataException("APR cannot be negative.");string date=GetString(values,"next_due_date");if(date!=""&&!ValidDate(date))throw new InvalidDataException("Choose a valid debt due date.");}
+      if(type=="debt_payments"){if(GetLong(values,"amount_cents")<=0||GetLong(values,"principal_cents")<=0)throw new InvalidDataException("The debt payment is invalid.");if(!ValidDate(GetString(values,"payment_date")))throw new InvalidDataException("Choose a valid payment date.");RequireReference(db,slug,workspace,"debts",GetString(values,"debt"));}
+      if(type=="investments"){ValidateCurrency(db,values);ValidateSnapshot(values,"cost_basis_cents","cost_basis_usd_cents");ValidateSnapshot(values,"current_value_cents","current_value_usd_cents");RequireReference(db,slug,workspace,"accounts",GetString(values,"account"));Dictionary<string,string> investmentAccount=db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='accounts' AND long_id=? AND status='active' AND json_extract(data_json,'$.account_type')='investment' LIMIT 1",slug,GetString(values,"account"));if(investmentAccount==null)throw new InvalidDataException("Choose an investment account.");string date=GetString(values,"valuation_date");if(date!=""&&!ValidDate(date))throw new InvalidDataException("Choose a valid valuation date.");}
+      if(type=="scenarios"){ValidateCurrency(db,values);ValidateSnapshot(values,"monthly_adjustment_cents","monthly_adjustment_usd_cents",true);int months=GetInt(values,"months");if(months<1||months>120)throw new InvalidDataException("Forecast months must be between 1 and 120.");}
+      if(type=="circles")ValidateCurrency(db,values);
+      if(type=="circle_members")RequireReference(db,slug,workspace,"circles",GetString(values,"circle"));
+      if(type=="circle_entries"){if(GetLong(values,"amount_cents")<=0)throw new InvalidDataException("The circle amount must be positive.");ValidateCurrency(db,values);ValidateSnapshot(values,"amount_cents","amount_usd_cents");RequireReference(db,slug,workspace,"circles",GetString(values,"circle"));RequireReference(db,slug,workspace,"circle_members",GetString(values,"member"));Dictionary<string,string> member=db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='circle_members' AND long_id=? AND status='active' AND json_extract(data_json,'$.circle')=? LIMIT 1",slug,GetString(values,"member"),GetString(values,"circle"));if(member==null)throw new InvalidDataException("The selected person is not in that circle.");if(!new[]{"contribution","loan","repayment","withdrawal"}.Contains(GetString(values,"entry_type")))throw new InvalidDataException("The circle entry type is invalid.");if(!ValidDate(GetString(values,"entry_date")))throw new InvalidDataException("Choose a valid circle date.");}
+    }
+
+    private static void ValidateTransferBatch(List<Dictionary<string,object> > rows) {
+      Dictionary<string,List<Dictionary<string,object> > > groups=new Dictionary<string,List<Dictionary<string,object> > >();
+      foreach(Dictionary<string,object> row in rows){Dictionary<string,object> values=GetObject(row,"data");string group=GetString(values,"transfer_group");if(!groups.ContainsKey(group))groups[group]=new List<Dictionary<string,object> >();groups[group].Add(values);}
+      foreach(List<Dictionary<string,object> > group in groups.Values){if(group.Count!=2||!group.Any(row=>GetString(row,"transaction_type")=="transfer_out")||!group.Any(row=>GetString(row,"transaction_type")=="transfer_in")||Math.Abs(GetLong(group[0],"amount_usd_cents")-GetLong(group[1],"amount_usd_cents"))>1)throw new InvalidOperationException("A local transfer must contain one balanced outflow and inflow.");}
+    }
+
+    private static void RequireReference(SqliteDb db,string slug,string workspace,string type,string longId){longId=SafeLongId(longId);if(db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,type,longId,workspace)==null)throw new InvalidDataException("A linked finance record is unavailable.");}
+    private static bool ValidDate(string value){DateTime date;return value!=null&&value.Length==10&&DateTime.TryParseExact(value,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date);}
+    private static void ValidateSnapshot(Dictionary<string,object> values,string nativeField,string usdField,bool signed=false){long native=GetLong(values,nativeField),usd=GetLong(values,usdField);double rate=GetDouble(values,"fx_rate");if(rate<=0||(!signed&&(native<0||usd<0))||Math.Abs(Math.Round(native/rate)-usd)>1)throw new InvalidDataException("The finance currency snapshot is invalid.");}
+    private static void ValidateCurrency(SqliteDb db,Dictionary<string,object> values){string code=GetString(values,"native_currency_code").ToUpperInvariant();if(code.Length!=3||db.QueryOne("SELECT code FROM local_currency_rates WHERE code=? AND rate>0 LIMIT 1",code)==null)throw new InvalidDataException("Choose an active local currency.");}
+
+    private object FinanceDelete(string slug,Dictionary<string,object> payload) {
+      string type=SafeType(GetString(payload,"record_type")),longId=SafeLongId(GetString(payload,"long_id"));if(!FinanceRecordTypes.Contains(type))throw new InvalidOperationException("Unknown finance record type.");
+      using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT version FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND status='active' LIMIT 1",slug,type,longId);if(row==null)throw new InvalidOperationException("The finance record was already deleted.");if(ToInt(row["version"])!=GetInt(payload,"version"))throw new InvalidOperationException("This finance record changed. Reopen it and try again.");string now=Now();db.Exec("BEGIN IMMEDIATE");try{db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND record_type=? AND long_id=?",now,slug,type,longId);if(type=="workspaces"){db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND status='active'",now,slug,longId);db.Execute("UPDATE local_plugin_attachments SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND status='active'",now,slug,longId);}db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}ProtectDatabaseFile();return new Dictionary<string,object>{{"deleted",true}};
+    }
+
+    private object FinanceSettings(Dictionary<string,object> payload) {
+      string display=GetString(payload,"display_currency").ToUpperInvariant();object raw;object[] rates=payload.TryGetValue("currencies",out raw)?raw as object[]:null;
+      using(SqliteDb db=Open()){if(rates!=null)foreach(object value in rates){Dictionary<string,object> rate=value as Dictionary<string,object>;if(rate==null)continue;string code=GetString(rate,"code").ToUpperInvariant(),name=GetString(rate,"name").Trim();double amount=GetDouble(rate,"rate");if(code.Length!=3||name==""||amount<=0||amount>1000000000)throw new InvalidDataException("A local currency rate is invalid.");db.Execute("INSERT OR REPLACE INTO local_currency_rates(code,name,rate,updated_at)VALUES(?,?,?,?)",code,name,amount,Now());}if(db.QueryOne("SELECT code FROM local_currency_rates WHERE code=? LIMIT 1",display)==null)throw new InvalidDataException("The display currency is unavailable.");db.Execute("UPDATE users SET display_currency=?,updated_at=? WHERE id=1",display,Now());}ProtectDatabaseFile();return new Dictionary<string,object>{{"saved",true}};
+    }
+
+    private object FinanceAttachmentUpload(string slug,Dictionary<string,object> payload) {
+      // ponytail: base64 is bounded at 25 MB; switch to a streamed native picker only if memory profiling warrants it.
+      string workspace=SafeLongId(GetString(payload,"workspace_long_id")),transaction=SafeLongId(GetString(payload,"transaction_long_id")),name=Path.GetFileName(GetString(payload,"original_name"));if(name==""||name.Length>255)throw new InvalidDataException("The attachment name is invalid.");
+      byte[] content;try{content=Convert.FromBase64String(GetString(payload,"content_base64"));}catch{throw new InvalidDataException("The attachment content is invalid.");}if(content.Length<4||content.Length>25*1024*1024)throw new InvalidDataException("Attachments must be no larger than 25 MB.");
+      string mime=DetectFinanceMime(content);if(mime=="")throw new InvalidDataException("Only private JPG, PNG, WebP, and PDF attachments are supported.");
+      using(SqliteDb db=Open()){RequireReference(db,slug,workspace,"transactions",transaction);if(ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_attachments WHERE slug=? AND transaction_long_id=? AND status='active'",slug,transaction))>=20)throw new InvalidOperationException("A transaction allows 20 attachments.");string longId="local_attachment_"+Guid.NewGuid().ToString("N"),extension=mime=="image/jpeg"?".jpg":mime=="image/png"?".png":mime=="image/webp"?".webp":".pdf",relative=Path.Combine("plugins",slug,"attachments",longId+extension),path=Path.GetFullPath(Path.Combine(PortablePaths.MediaDir,relative));if(!path.StartsWith(Path.GetFullPath(PortablePaths.MediaDir)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("The attachment path is invalid.");Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,content);string now=Now();db.Execute("INSERT INTO local_plugin_attachments(slug,long_id,workspace_long_id,transaction_long_id,relative_path,original_name,mime_type,file_size,version,status,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,1,'active',?,?)",slug,longId,workspace,transaction,relative,name,mime,content.Length,now,now);ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",longId}};}
+    }
+
+    private object FinanceAttachmentGet(string slug,Dictionary<string,object> payload) {
+      string longId=SafeLongId(GetString(payload,"long_id"));using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT relative_path,original_name,mime_type,file_size FROM local_plugin_attachments WHERE slug=? AND long_id=? AND status='active' LIMIT 1",slug,longId);if(row==null)throw new InvalidOperationException("The attachment is unavailable.");string path=Path.GetFullPath(Path.Combine(PortablePaths.MediaDir,row["relative_path"]));if(!path.StartsWith(Path.GetFullPath(PortablePaths.MediaDir)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!File.Exists(path))throw new InvalidOperationException("The private attachment file is missing.");return new Dictionary<string,object>{{"original_name",row["original_name"]},{"mime_type",row["mime_type"]},{"content_base64",Convert.ToBase64String(File.ReadAllBytes(path))}};}
+    }
+
+    private object FinanceAttachmentDelete(string slug,Dictionary<string,object> payload) {
+      string longId=SafeLongId(GetString(payload,"long_id"));using(SqliteDb db=Open())db.Execute("UPDATE local_plugin_attachments SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND long_id=? AND status='active'",Now(),slug,longId);ProtectDatabaseFile();return new Dictionary<string,object>{{"deleted",true}};
+    }
+
+    private static string DetectFinanceMime(byte[] bytes){if(bytes.Length>=4&&bytes[0]==0xff&&bytes[1]==0xd8&&bytes[2]==0xff)return "image/jpeg";if(bytes.Length>=8&&bytes[0]==0x89&&bytes[1]==0x50&&bytes[2]==0x4e&&bytes[3]==0x47)return "image/png";if(bytes.Length>=12&&Encoding.ASCII.GetString(bytes,0,4)=="RIFF"&&Encoding.ASCII.GetString(bytes,8,4)=="WEBP")return "image/webp";if(bytes.Length>=5&&Encoding.ASCII.GetString(bytes,0,5)=="%PDF-")return "application/pdf";return "";}
+
+    private void SeedFinanceSample(SqliteDb db,string slug,string workspace) {
+      string account=NewLongId("accounts"),now=Now();Dictionary<string,object> accountData=new Dictionary<string,object>{{"name","Everyday checking"},{"account_type","checking"},{"native_currency_code","USD"},{"opening","2500.00"},{"opening_cents",250000},{"opening_usd_cents",250000},{"fx_rate",1}};
+      db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,"accounts",account,workspace,json.Serialize(accountData),now,now);
+      foreach(Dictionary<string,object> values in new[]{new Dictionary<string,object>{{"transaction_type","income"},{"account",account},{"value","3200.00"},{"amount_cents",320000},{"amount_usd_cents",320000},{"fx_rate",1},{"native_currency_code","USD"},{"transaction_date",todayUtc()},{"payee","Salary"},{"state","cleared"},{"note","Removable sample data"},{"splits",new object[0]}},new Dictionary<string,object>{{"transaction_type","expense"},{"account",account},{"value","190.00"},{"amount_cents",19000},{"amount_usd_cents",19000},{"fx_rate",1},{"native_currency_code","USD"},{"transaction_date",todayUtc()},{"payee","Groceries"},{"state","cleared"},{"note","Removable sample data"},{"splits",new[]{new Dictionary<string,object>{{"category","Food"},{"amount_cents",19000}}}}}})db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,"transactions",NewLongId("transactions"),workspace,json.Serialize(values),now,now);
+    }
+    private static string todayUtc(){return DateTime.UtcNow.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);}
+
+    private static Dictionary<string,object> GetObject(Dictionary<string,object> values,string key){object value;if(!values.TryGetValue(key,out value)||!(value is Dictionary<string,object>))return new Dictionary<string,object>();return (Dictionary<string,object>)value;}
+    private static string GetString(Dictionary<string,object> values,string key){object value;return values.TryGetValue(key,out value)&&value!=null?Convert.ToString(value,CultureInfo.InvariantCulture):"";}
+    private static int GetInt(Dictionary<string,object> values,string key){return (int)Math.Max(Int32.MinValue,Math.Min(Int32.MaxValue,GetLong(values,key)));}
+    private static long GetLong(Dictionary<string,object> values,string key){object value;if(!values.TryGetValue(key,out value)||value==null)return 0;long parsed;return Int64.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Any,CultureInfo.InvariantCulture,out parsed)?parsed:(long)ToDouble(value);}
+    private static double GetDouble(Dictionary<string,object> values,string key){object value;return values.TryGetValue(key,out value)?ToDouble(value):0;}
+    private static double ToDouble(object value){double parsed;return Double.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Any,CultureInfo.InvariantCulture,out parsed)?parsed:0;}
+    private static long ToLong(object value){long parsed;return Int64.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),out parsed)?parsed:0;}
+    private static bool ToBool(object value){bool parsed;return value!=null&&(Boolean.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),out parsed)?parsed:Convert.ToString(value,CultureInfo.InvariantCulture)=="1");}
 
     internal bool HasUser() {
       using (SqliteDb db = Open()) {
@@ -997,6 +1246,15 @@ namespace RacinageFreeDesktop {
         }
         return row;
       }
+    }
+
+    internal List<Dictionary<string,string> > GetCurrencyRates(){using(SqliteDb db=Open())return db.Query("SELECT code,name,printf('%.8g',rate) rate FROM local_currency_rates ORDER BY CASE code WHEN 'USD' THEN 0 ELSE 1 END,code");}
+    internal string GetDisplayCurrency(){using(SqliteDb db=Open()){object value=db.Scalar("SELECT display_currency FROM users WHERE id=1 LIMIT 1");return value==null?"USD":Convert.ToString(value,CultureInfo.InvariantCulture);}}
+    internal void SaveCurrencySettings(string display,string lines){
+      display=(display??"USD").Trim().ToUpperInvariant();Dictionary<string,Dictionary<string,object> > parsed=new Dictionary<string,Dictionary<string,object> >(StringComparer.OrdinalIgnoreCase);
+      foreach(string line in (lines??"").Split(new[]{"\r\n","\n"},StringSplitOptions.RemoveEmptyEntries)){string[] parts=line.Split('|');if(parts.Length!=3)throw new InvalidOperationException("Each currency line must contain CODE | Name | rate.");string code=parts[0].Trim().ToUpperInvariant(),name=parts[1].Trim();double rate;if(code.Length!=3||name==""||!Double.TryParse(parts[2].Trim(),NumberStyles.Any,CultureInfo.InvariantCulture,out rate)||rate<=0||rate>1000000000)throw new InvalidOperationException("A currency line is invalid.");parsed[code]=new Dictionary<string,object>{{"code",code},{"name",name},{"rate",rate}};}
+      parsed["USD"]=new Dictionary<string,object>{{"code","USD"},{"name","United States Dollar"},{"rate",1d}};if(!parsed.ContainsKey(display))throw new InvalidOperationException("Add the selected display currency to the rates list first.");
+      using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{db.Exec("DELETE FROM local_currency_rates WHERE code!='USD'");foreach(Dictionary<string,object> rate in parsed.Values)db.Execute("INSERT OR REPLACE INTO local_currency_rates(code,name,rate,updated_at)VALUES(?,?,?,?)",rate["code"],rate["name"],rate["rate"],Now());db.Execute("UPDATE users SET display_currency=?,updated_at=? WHERE id=1",display,Now());db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}ProtectDatabaseFile();
     }
 
     internal void SaveFamily(string name, string location, string story) {
@@ -1051,12 +1309,12 @@ namespace RacinageFreeDesktop {
     }
 
     internal List<Dictionary<string, string> > GetInstalledPlugins() {
-      using (SqliteDb db = Open()) return db.Query("SELECT slug,name,version,checksum_sha256,entrypoint,status,installed_at FROM plugin_installs WHERE status='enabled' ORDER BY name COLLATE NOCASE");
+      using (SqliteDb db = Open()) return db.Query("SELECT slug,name,version,checksum_sha256,entrypoint,status,installed_at FROM plugin_installs WHERE status IN('enabled','hidden') ORDER BY name COLLATE NOCASE");
     }
 
-    internal void UninstallPlugin(string slug) {
-      if (!PluginCatalogClient.ValidSlug(slug)) return;
-      using (SqliteDb db = Open()) db.Execute("UPDATE plugin_installs SET status='uninstalled',updated_at=? WHERE slug=?", Now(), slug);
+    internal void SetPluginStatus(string slug,string status) {
+      if (!PluginCatalogClient.ValidSlug(slug)||!new[]{"enabled","hidden"}.Contains(status)) return;
+      using (SqliteDb db = Open()) db.Execute("UPDATE plugin_installs SET status=?,updated_at=? WHERE slug=?",status,Now(),slug);
     }
 
     internal string PluginEntrypoint(string slug) {

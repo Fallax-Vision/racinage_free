@@ -2,19 +2,21 @@
 
 Racinage Free is the open-source Windows portable edition of Racinage for the Lite Free plan. It runs locally on one Windows device and stores family data under `%LOCALAPPDATA%\Racinage Free`. The optional Plugins tab connects only to the signed public Racinage plugin catalog and hosted purchase pages; it does not connect the local family database to the hosted Racinage database.
 
-![Racinage Free screenshot](docs/images/racinage-free-screenshot.webp)
+![Finance Manager running fully offline in Racinage Free](docs/images/racinage-free-finance-manager.png)
 
 ## Download
 
-- Latest bundled release: [`RacinageFree-v0.13.3.exe`](releases/desktop/racinage-free-v0.13.3/RacinageFree-v0.13.3.exe)
-- Version: `racinage-free-v0.13.3`
-- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.13.3/checksums.txt)
+- Latest bundled release: [`RacinageFree-v0.14.0.exe`](releases/desktop/racinage-free-v0.14.0/RacinageFree-v0.14.0.exe)
+- Version: `racinage-free-v0.14.0`
+- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.14.0/checksums.txt)
 
 ## What Is Included
 
 - Native C# WinForms/WebView2 host.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- Preinstalled Finance Manager with offline workspaces, accounts, transactions, budgets, goals, debts, investments, forecasts, reports, circles, imports, exports, and private attachments.
+- User display currency and manually maintained offline currency rates.
 - Bundled Inter variable fonts for consistent offline typography.
 - Signed online catalog for reviewed local-compatible plugins, including monthly/yearly pricing and active hosted reductions, with checksum and archive-path verification.
 - Sandboxed portable plugin pages and hosted links for optional Pro purchases and entitlements.
@@ -42,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racina
 Output:
 
 ```text
-releases\desktop\racinage-free-v0.13.3\RacinageFree-v0.13.3.exe
+releases\desktop\racinage-free-v0.14.0\RacinageFree-v0.14.0.exe
 ```
 
 ## Local Data

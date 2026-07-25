@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Finance Manager</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="financeApp" data-bridge-token="{{FINANCE_BRIDGE_TOKEN}}">
+    <header class="app-head">
+      <div>
+        <p class="kicker">Finance Manager</p>
+        <h1>Personal finance, clearly recorded</h1>
+        <p>Records activity only. It never sends or receives real money.</p>
+      </div>
+      <div class="head-actions">
+        <label>Display currency
+          <select id="displayCurrency" aria-label="Display currency"></select>
+        </label>
+        <button class="ghost" id="toggleBalances" type="button">Hide balances</button>
+      </div>
+    </header>
+
+    <p class="feedback" id="feedback" hidden aria-live="polite"></p>
+
+    <label class="mobile-nav">Finance Manager section
+      <select id="mobileTopNav"></select>
+    </label>
+    <nav class="top-tabs" id="topTabs" aria-label="Finance Manager">
+      <button type="button" data-top="home" class="active">Home</button>
+      <button type="button" data-top="workspaces">Workspaces</button>
+      <button type="button" data-top="help">Help</button>
+    </nav>
+
+    <main id="view" aria-live="polite">
+      <p class="empty">Opening your local finance records...</p>
+    </main>
+  </div>
+
+  <dialog id="recordDialog">
+    <form method="dialog" id="recordForm">
+      <header><div><p class="kicker" id="dialogKicker">Finance Manager</p><h2 id="dialogTitle">Add record</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+      <div class="form-grid" id="dialogFields"></div>
+      <footer><button class="ghost" value="cancel">Cancel</button><button class="primary" id="dialogSave" value="default">Save</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="importDialog">
+    <form method="dialog" id="importForm">
+      <header><div><p class="kicker">Transactions</p><h2>Import CSV, OFX, or QIF</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+      <label>Destination account<select name="account" required></select></label>
+      <label>Finance file<input type="file" name="file" accept=".csv,.ofx,.qif" required></label>
+      <div class="import-map" id="csvMapping" hidden>
+        <p>CSV mapping</p>
+        <label>Date column<select name="dateColumn"></select></label>
+        <label>Amount column<select name="amountColumn"></select></label>
+        <label>Type column<select name="typeColumn"><option value="">Infer from amount</option></select></label>
+        <label>Payee column<select name="payeeColumn"><option value="">None</option></select></label>
+        <label>Note column<select name="noteColumn"><option value="">None</option></select></label>
+      </div>
+      <div id="importPreview" class="preview" hidden></div>
+      <footer><button class="ghost" value="cancel">Cancel</button><button class="primary" id="previewImport" value="default">Preview import</button></footer>
+    </form>
+  </dialog>
+
+  <script>window.FINANCE_BRIDGE_TOKEN="{{FINANCE_BRIDGE_TOKEN}}";</script>
+  <script src="app.js"></script>
+</body>
+</html>

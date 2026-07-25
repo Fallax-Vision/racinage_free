@@ -1,9 +1,9 @@
 {
   "name": "Racinage Free",
-  "version": "0.13.3",
-  "tag": "racinage-free-v0.13.3",
-  "artifact": "releases/desktop/racinage-free-v0.13.3/RacinageFree-v0.13.3.exe",
-  "sha256": "fab73dd8137e2439194d10cf0cdbd2f03f100c05efb9b17cc28134aae814060e",
-  "bytes": 2425344,
+  "version": "0.14.0",
+  "tag": "racinage-free-v0.14.0",
+  "artifact": "releases/desktop/racinage-free-v0.14.0/RacinageFree-v0.14.0.exe",
+  "sha256": "cdffc4aa95695bea62801c9ba9696ca63a48de531e71b27c5394fe286b9dda59",
+  "bytes": 2457600,
   "license": "MIT"
 }
