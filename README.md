@@ -4,11 +4,13 @@ Racinage Free is the open-source Windows portable edition of Racinage for the Li
 
 ![Finance Manager running fully offline in Racinage Free](docs/images/racinage-free-finance-manager.png)
 
+![NameGen helping parents discover names offline](docs/images/racinage-free-namegen.png)
+
 ## Download
 
-- Latest bundled release: [`RacinageFree-v0.14.0.exe`](releases/desktop/racinage-free-v0.14.0/RacinageFree-v0.14.0.exe)
-- Version: `racinage-free-v0.14.0`
-- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.14.0/checksums.txt)
+- Latest bundled release: [`RacinageFree-v0.15.0.exe`](releases/desktop/racinage-free-v0.15.0/RacinageFree-v0.15.0.exe)
+- Version: `racinage-free-v0.15.0`
+- SHA-256: see [`checksums.txt`](releases/desktop/racinage-free-v0.15.0/checksums.txt)
 
 ## What Is Included
 
@@ -16,10 +18,11 @@ Racinage Free is the open-source Windows portable edition of Racinage for the Li
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
 - Preinstalled Finance Manager with offline workspaces, accounts, transactions, budgets, goals, debts, investments, forecasts, reports, circles, imports, exports, and private attachments.
+- Installable completely free NameGen companion for parents, with a bundled offline name finder, custom names, favorites, personal ratings and notes, private groups, solo baby projects, and JSON import/export.
 - User display currency and manually maintained offline currency rates.
 - Bundled Inter variable fonts for consistent offline typography.
 - Signed online catalog for reviewed local-compatible plugins, including monthly/yearly pricing and active hosted reductions, with checksum and archive-path verification.
-- Sandboxed portable plugin pages and hosted links for optional Pro purchases and entitlements.
+- Sandboxed portable plugin pages with an asynchronous manifest-authorized local bridge and hosted links for optional Pro purchases and entitlements.
 - Single-file bootstrap executable with payload refresh.
 - Racinage icon, screenshot, build script, release manifest, and checksums.
 
@@ -44,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racina
 Output:
 
 ```text
-releases\desktop\racinage-free-v0.14.0\RacinageFree-v0.14.0.exe
+releases\desktop\racinage-free-v0.15.0\RacinageFree-v0.15.0.exe
 ```
 
 ## Local Data

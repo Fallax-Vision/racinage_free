@@ -83,7 +83,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.14.0";
+    internal const string Version = "0.15.0";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -427,7 +427,7 @@ namespace RacinageFreeDesktop {
         if (path == "/start-free") { StartFree(context); return; }
         if (path == "/family") { Family(context); return; }
         if (path == "/manage" || path == "/manage/plugins" || path == "/manage/family" || path == "/manage/settings") { Manage(context, path); return; }
-        if (path == "/local-plugin-api/finance-manager") { LocalPluginApi(context, "finance-manager"); return; }
+        if (path.StartsWith("/local-plugin-api/", StringComparison.OrdinalIgnoreCase)) { LocalPluginApi(context, path.Substring(18)); return; }
         if (path.StartsWith("/plugin/", StringComparison.OrdinalIgnoreCase)) { PortablePlugin(context, path.Substring(8)); return; }
         if (path == "/logout") { store.ClearSession(); ExpireCookie(context); Redirect(context, "/"); return; }
         WriteHtml(context, Home(context));
@@ -608,16 +608,26 @@ namespace RacinageFreeDesktop {
     private void Manage(HttpListenerContext context, string path) {
       if (!IsAuthenticated(context)) { Redirect(context, "/login"); return; }
       string message = "";
+      bool asynchronous = String.Equals(context.Request.Headers["X-Requested-With"], "XMLHttpRequest", StringComparison.OrdinalIgnoreCase);
       if (context.Request.HttpMethod == "POST") {
         Dictionary<string, string> form = ReadForm(context);
-        if (!CheckCsrf(form)) { WriteHtml(context, ManagePage(path, "Your session expired. Please try again."), 400); return; }
+        if (!CheckCsrf(form)) {
+          if (asynchronous) WriteJson(context, json.Serialize(new Dictionary<string,object>{{"ok",false},{"message","Your session expired. Please try again."}}), 400);
+          else WriteHtml(context, ManagePage(path, "Your session expired. Please try again."), 400);
+          return;
+        }
         string action = form.ContainsKey("action") ? form["action"] : "";
         string slug = form.ContainsKey("slug") ? form["slug"] : "";
-        if (action == "install_plugin") message = pluginCatalog.Install(slug, store);
-        else if (action == "hide_plugin") { store.SetPluginStatus(slug, "hidden"); message = "Plugin hidden. Its local data and attachments were kept."; }
-        else if (action == "enable_plugin") { store.SetPluginStatus(slug, "enabled"); message = "Plugin enabled."; }
-        else if (action == "uninstall_plugin") { store.SetPluginStatus(slug, "hidden"); message = "Plugin hidden. Its local data was kept."; }
+        bool frenchNameGen = String.Equals(slug, "namegen", StringComparison.OrdinalIgnoreCase) && IsFrenchCulture();
+        if (action == "install_plugin") {
+          message = pluginCatalog.Install(slug, store);
+          if (frenchNameGen && message.StartsWith("Plugin installed.", StringComparison.Ordinal)) message = "Extension NameGen installée. Les limites Lite restent applicables.";
+        }
+        else if (action == "hide_plugin") { store.SetPluginStatus(slug, "hidden"); message = frenchNameGen ? "Extension NameGen désactivée. Ses données locales ont été conservées." : "Plugin disabled. Its local data and attachments were kept."; }
+        else if (action == "enable_plugin") { store.SetPluginStatus(slug, "enabled"); message = frenchNameGen ? "Extension NameGen activée." : "Plugin enabled."; }
+        else if (action == "uninstall_plugin") { bool deleteData=form.ContainsKey("delete_data")&&form["delete_data"]=="yes";store.UninstallPlugin(slug,deleteData);message=frenchNameGen?(deleteData?"Extension NameGen désinstallée et données locales supprimées.":"Extension NameGen désinstallée. Ses données locales ont été conservées."):(deleteData?"Plugin uninstalled and its local data deleted.":"Plugin uninstalled. Its local data was kept."); }
         else if (action == "save_currency_settings") { store.SaveCurrencySettings(form.ContainsKey("display_currency")?form["display_currency"]:"USD",form.ContainsKey("currency_rates")?form["currency_rates"]:"");message="Currency settings saved."; }
+        if (asynchronous) { WriteJson(context,json.Serialize(new Dictionary<string,object>{{"ok",true},{"message",message},{"html",PluginsPanel()}}));return; }
       }
       WriteHtml(context, ManagePage(path, message));
     }
@@ -645,7 +655,7 @@ namespace RacinageFreeDesktop {
       Dictionary<string, Dictionary<string, string> > installedBySlug = new Dictionary<string, Dictionary<string, string> >(StringComparer.OrdinalIgnoreCase);
       foreach (Dictionary<string, string> row in installed) installedBySlug[row["slug"]] = row;
       StringBuilder cards = new StringBuilder();
-      Dictionary<string,string> financeInstall;if(installedBySlug.TryGetValue("finance-manager",out financeInstall)){bool financeEnabled=financeInstall["status"]=="enabled";cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>F</span><div><h3>Finance Manager</h3><p class='plugin-meta'>1.0.0 - bundled</p></div></div><p>Offline personal accounts, transactions, budgets, goals, debts, investments, forecasts, reports, attachments, and circles.</p><div class='actions'>"+(financeEnabled?"<a class='button' href='/plugin/finance-manager'>Open</a>":"")+"<form method='post' action='/manage/plugins'>"+CsrfInput()+"<input type='hidden' name='action' value='"+(financeEnabled?"hide_plugin":"enable_plugin")+"'><input type='hidden' name='slug' value='finance-manager'><button class='button ghost' type='submit'>"+(financeEnabled?"Hide":"Enable")+"</button></form></div></article>");}
+      Dictionary<string,string> financeInstall;if(installedBySlug.TryGetValue("finance-manager",out financeInstall)){bool financeEnabled=financeInstall["status"]=="enabled";cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>F</span><div><h3>Finance Manager</h3><p class='plugin-meta'>1.0.0 - bundled</p></div></div><p>Offline personal accounts, transactions, budgets, goals, debts, investments, forecasts, reports, attachments, and circles.</p><div class='actions'>"+(financeEnabled?"<a class='button' href='/plugin/finance-manager'>Open</a>":"")+"<form class='plugin-action' method='post' action='/manage/plugins'>"+CsrfInput()+"<input type='hidden' name='action' value='"+(financeEnabled?"hide_plugin":"enable_plugin")+"'><input type='hidden' name='slug' value='finance-manager'><button class='button ghost' type='submit'>"+(financeEnabled?"Hide":"Enable")+"</button></form></div></article>");}
       try {
         List<PortablePluginInfo> plugins = pluginCatalog.GetPlugins();
         foreach (PortablePluginInfo plugin in plugins) {
@@ -655,7 +665,9 @@ namespace RacinageFreeDesktop {
           int listPriceCents = Math.Max(0, plugin.price_cents);
           int effectivePriceCents = plugin.effective_price_cents.HasValue ? Math.Min(listPriceCents, Math.Max(0, plugin.effective_price_cents.Value)) : listPriceCents;
           string currency = String.IsNullOrWhiteSpace(plugin.currency) ? "USD" : plugin.currency.ToUpperInvariant();
-          string displayName = String.IsNullOrWhiteSpace(plugin.name) ? "Plugin" : plugin.name;
+          bool frenchNameGen=String.Equals(plugin.slug,"namegen",StringComparison.OrdinalIgnoreCase)&&IsFrenchCulture();
+          string displayName = frenchNameGen&&!String.IsNullOrWhiteSpace(plugin.name_fr)?plugin.name_fr:(String.IsNullOrWhiteSpace(plugin.name) ? "Plugin" : plugin.name);
+          string displaySummary = frenchNameGen&&!String.IsNullOrWhiteSpace(plugin.summary_fr)?plugin.summary_fr:plugin.summary;
           string interval = plugin.pricing_type == "subscription" ? (plugin.billing_interval == "year" ? "/year" : "/month") : "";
           string price = plugin.pricing_type == "free" || listPriceCents <= 0 ? "Free" : currency + " " + (effectivePriceCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + interval;
           string priceMeta = H(plugin.version) + " - ";
@@ -666,10 +678,10 @@ namespace RacinageFreeDesktop {
             string expiry = DateTime.TryParse(plugin.promotion_expires_at, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out promotionEnd) ? " until " + promotionEnd.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) : "";
             priceMeta += "<small>" + H(plugin.promotion_label + expiry) + "</small>";
           }
-          cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>" + H(displayName.Substring(0, 1).ToUpperInvariant()) + "</span><div><h3>" + H(displayName) + "</h3><p class='plugin-meta'>" + priceMeta + "</p></div></div><p>" + H(plugin.summary) + "</p>");
+          cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>" + H(displayName.Substring(0, 1).ToUpperInvariant()) + "</span><div><h3>" + H(displayName) + "</h3><p class='plugin-meta'>" + priceMeta + "</p></div></div><p>" + H(displaySummary) + "</p>");
           if (plugin.local == null || !plugin.local.supported) cards.Append("<p class='notice'>Web only: " + H(plugin.local == null ? "No reviewed local runtime is available." : plugin.local.reason) + "</p>");
-          else if (isInstalled) cards.Append("<div class='actions'><a class='button' href='/plugin/" + A(plugin.slug) + "'>Open</a><form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='hide_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button ghost' type='submit'>Hide</button></form></div>");
-          else if ((plugin.download_url ?? "") != "") cards.Append("<form method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='install_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button' type='submit'>Install</button></form>");
+          else if (isInstalled) cards.Append("<div class='actions'>"+(current["status"]=="enabled"?"<a class='button' href='/plugin/" + A(plugin.slug) + "'>"+(frenchNameGen?"Ouvrir":"Open")+"</a>":"")+"<form class='plugin-action' method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='"+(current["status"]=="enabled"?"hide_plugin":"enable_plugin")+"'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button ghost' type='submit'>"+(current["status"]=="enabled"?(frenchNameGen?"Désactiver":"Disable"):(frenchNameGen?"Activer":"Enable"))+"</button></form><form class='plugin-action' method='post' action='/manage/plugins'>"+CsrfInput()+"<input type='hidden' name='action' value='uninstall_plugin'><input type='hidden' name='slug' value='"+A(plugin.slug)+"'><button class='button ghost danger' type='submit'>"+(frenchNameGen?"Désinstaller":"Uninstall")+"</button></form></div>");
+          else if ((plugin.download_url ?? "") != "") cards.Append("<form class='plugin-action' method='post' action='/manage/plugins'>" + CsrfInput() + "<input type='hidden' name='action' value='install_plugin'><input type='hidden' name='slug' value='" + A(plugin.slug) + "'><button class='button' type='submit'>"+(frenchNameGen?"Installer":"Install")+"</button></form>");
           if (plugin.pricing_type != "free" && plugin.price_cents > 0) cards.Append("<p><a href='" + A(plugin.purchase_url) + "'>Buy or manage Pro access on Racinage</a></p>");
           cards.Append("</article>");
         }
@@ -678,6 +690,11 @@ namespace RacinageFreeDesktop {
         cards.Append("<p class='notice'>The online plugin library is unavailable right now. Installed plugins remain available.</p>");
       }
       return "<section class='manage-card'><div class='manage-card-head'><div><h2>Plugin library</h2><p>Only reviewed, checksum-verified, local-compatible bundles can be installed. Collaboration plugins and controls are excluded.</p></div><span class='status-pill'>Lite rules apply</span></div><div class='plugin-grid'>" + cards.ToString() + "</div></section>";
+    }
+
+    private static bool IsFrenchCulture() {
+      CultureInfo culture = CultureInfo.CurrentUICulture;
+      return String.Equals(culture.TwoLetterISOLanguageName, "fr", StringComparison.OrdinalIgnoreCase);
     }
 
     private void PortablePlugin(HttpListenerContext context, string slug) {
@@ -690,14 +707,15 @@ namespace RacinageFreeDesktop {
       if (File.Exists(cssPath)) source = source.Replace("<link rel=\"stylesheet\" href=\"app.css\">", "<style>" + File.ReadAllText(cssPath, Encoding.UTF8) + "</style>");
       if (File.Exists(jsPath)) source = source.Replace("<script src=\"app.js\"></script>", "<script>" + File.ReadAllText(jsPath, Encoding.UTF8).Replace("</script>", "<\\/script>") + "</script>");
       string bridgeToken = RandomToken(32);
-      source = source.Replace("{{FINANCE_BRIDGE_TOKEN}}", bridgeToken);
-      string body = "<section class='manage-head plugin-shell-head'><div><p class='kicker'>Local plugin</p><h1>Finance Manager</h1><p>Private local finance records remain available without internet access.</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' data-plugin-slug='" + A(slug) + "' data-bridge-token='" + A(bridgeToken) + "' sandbox='allow-scripts allow-forms allow-downloads allow-modals' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
+      source = source.Replace("{{FINANCE_BRIDGE_TOKEN}}", bridgeToken).Replace("{{RACINAGE_PLUGIN_BRIDGE_TOKEN}}",bridgeToken);
+      string pluginName=store.PluginName(slug),pluginCopy=String.Equals(slug,"namegen",StringComparison.OrdinalIgnoreCase)?"Private name-finding records remain available without internet access.":"Private local plugin records remain available without internet access.";
+      string body = "<section class='manage-head plugin-shell-head'><div><p class='kicker'>Local plugin</p><h1>"+H(pluginName)+"</h1><p>"+H(pluginCopy)+"</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' data-plugin-slug='" + A(slug) + "' data-bridge-token='" + A(bridgeToken) + "' sandbox='allow-scripts allow-forms allow-downloads allow-modals' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
       WriteHtml(context, Page(slug, body));
     }
 
     private void LocalPluginApi(HttpListenerContext context, string slug) {
-      if (!IsAuthenticated(context) || context.Request.HttpMethod != "POST" || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])) { WriteJson(context, "{\"ok\":false,\"message\":\"The local session is unavailable.\"}", 403); return; }
-      if (context.Request.ContentLength64 < 1 || context.Request.ContentLength64 > 40L * 1024L * 1024L) { WriteJson(context, "{\"ok\":false,\"message\":\"The finance request is too large.\"}", 413); return; }
+      if (!PluginCatalogClient.ValidSlug(slug) || !IsAuthenticated(context) || context.Request.HttpMethod != "POST" || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])) { WriteJson(context, "{\"ok\":false,\"message\":\"The local session is unavailable.\"}", 403); return; }
+      if (context.Request.ContentLength64 < 1 || context.Request.ContentLength64 > 40L * 1024L * 1024L) { WriteJson(context, "{\"ok\":false,\"message\":\"The plugin request is too large.\"}", 413); return; }
       try {
         string body;
         using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
@@ -707,7 +725,7 @@ namespace RacinageFreeDesktop {
         object result = store.LocalPluginAction(slug, action, payload ?? new Dictionary<string, object>());
         WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", true }, { "result", result } }), 200);
       } catch (Exception error) {
-        Program.Log("Local Finance bridge error: " + error.Message);
+        Program.Log("Local plugin bridge error: " + error.Message);
         WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", false }, { "message", error.Message } }), 400);
       }
     }
@@ -757,8 +775,8 @@ namespace RacinageFreeDesktop {
     private string Page(string title, string body) {
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
         "<title>" + H(title) + " - Racinage Free</title><style>" + Css() + "</style></head><body>" +
-        "<header><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
-        "<main>" + body + "</main><script>" + Js() + "</script></body></html>";
+        "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
+        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + "</script></body></html>";
     }
 
     private static string ErrorHtml(string error) {
@@ -778,7 +796,12 @@ namespace RacinageFreeDesktop {
     }
 
     private string Js() {
-      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});document.addEventListener('click',function(e){var p=e.target.closest&&e.target.closest('input[type=date],input[type=datetime-local],input[type=time],input[type=month],input[type=year]');if(!p||p.disabled||p.readOnly||typeof p.showPicker!=='function')return;try{p.showPicker();}catch(_){}});window.addEventListener('message',async function(e){var f=document.querySelector('.plugin-frame[data-bridge-token]'),m=e.data;if(!f||e.source!==f.contentWindow||!m||!m.financeBridge||m.slug!==f.dataset.pluginSlug||m.bridgeToken!==f.dataset.bridgeToken)return;var reply={financeBridgeResponse:true,bridgeToken:f.dataset.bridgeToken,requestId:m.requestId,ok:false};try{var r=await fetch('/local-plugin-api/'+encodeURIComponent(m.slug),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Racinage-CSRF':'" + A(store.CsrfToken) + "'},body:JSON.stringify({action:m.action,payload:m.payload||{}})}),j=await r.json();reply.ok=!!j.ok;reply.result=j.result;reply.message=j.message;}catch(_){reply.message='The local finance service could not complete the request.';}f.contentWindow.postMessage(reply,'*');});";
+      return "function showUpgrade(feature){var m=document.getElementById('upgradeModal');document.getElementById('upgradeFeature').textContent=feature;m.hidden=false;}function hideUpgrade(){document.getElementById('upgradeModal').hidden=true;}document.addEventListener('keydown',function(e){if(e.key==='Escape')hideUpgrade();});document.addEventListener('click',function(e){var p=e.target.closest&&e.target.closest('input[type=date],input[type=datetime-local],input[type=time],input[type=month],input[type=year]');if(!p||p.disabled||p.readOnly||typeof p.showPicker!=='function')return;try{p.showPicker();}catch(_){}});document.addEventListener('submit',async function(e){var f=e.target.closest&&e.target.closest('.plugin-action');if(!f)return;e.preventDefault();if(f.dataset.busy==='1')return;f.dataset.busy='1';try{var r=await fetch(f.action,{method:'POST',credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'},body:new URLSearchParams(new FormData(f))}),j=await r.json();if(!r.ok||!j.ok)throw new Error(j.message||'Plugin action failed.');var c=document.querySelector('.manage-content');if(c)c.innerHTML=j.html;var x=document.querySelector('.error');if(x){x.textContent=j.message;x.className='feedback';}}catch(x){var c=document.querySelector('.manage-content');if(c)c.insertAdjacentHTML('afterbegin','<p class=\"error\"></p>');var p=document.querySelector('.manage-content .error');if(p)p.textContent=x.message;}finally{delete f.dataset.busy;}});window.addEventListener('message',async function(e){var f=document.querySelector('.plugin-frame[data-bridge-token]'),m=e.data,legacy=m&&m.financeBridge;if(!f||e.source!==f.contentWindow||!m||(!m.pluginBridge&&!legacy)||m.slug!==f.dataset.pluginSlug||m.bridgeToken!==f.dataset.bridgeToken)return;var reply={pluginBridgeResponse:true,financeBridgeResponse:true,bridgeToken:f.dataset.bridgeToken,requestId:m.requestId,ok:false};try{var r=await fetch('/local-plugin-api/'+encodeURIComponent(m.slug),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Racinage-CSRF':'" + A(store.CsrfToken) + "'},body:JSON.stringify({action:m.action,payload:m.payload||{}})}),j=await r.json();reply.ok=!!j.ok;reply.result=j.result;reply.message=j.message;}catch(_){reply.message='The local plugin service could not complete the request.';}f.contentWindow.postMessage(reply,'*');});";
+    }
+
+    private string PluginLifecycleJs() {
+      string prompt=IsFrenchCulture()?"Supprimer aussi toutes les données locales de cette extension ? OK = supprimer, Annuler = conserver.":"Also delete all local data for this plugin? OK = delete, Cancel = keep.";
+      return "document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('.plugin-action button'),f=b&&b.form,a=f&&f.querySelector('input[name=action]');if(!a||a.value!=='uninstall_plugin')return;var old=f.querySelector('input[name=delete_data]');if(old)old.remove();if(confirm('"+A(prompt)+"')){var h=document.createElement('input');h.type='hidden';h.name='delete_data';h.value='yes';f.appendChild(h);}});";
     }
 
     private static void WriteHtml(HttpListenerContext context, string html) {
@@ -850,9 +873,9 @@ namespace RacinageFreeDesktop {
 
   internal sealed class PortableCatalogEnvelope { public string payload_base64; public string signature; public string algorithm; public string key_id; }
   internal sealed class PortableCatalogPayload { public string expires_at; public List<PortablePluginInfo> plugins; }
-  internal sealed class PortableLocalSupport { public bool supported; public string reason; public string root; public string entrypoint; }
+  internal sealed class PortableLocalSupport { public bool supported; public string reason; public string root; public string entrypoint; public string[] operations; }
   internal sealed class PortablePluginInfo {
-    public string slug; public string name; public string summary; public string description; public string pricing_type; public int price_cents; public int? effective_price_cents; public string billing_interval; public string promotion_label; public string promotion_expires_at;
+    public string slug; public string name; public string name_fr; public string summary; public string summary_fr; public string description; public string description_fr; public string pricing_type; public int price_cents; public int? effective_price_cents; public string billing_interval; public string promotion_label; public string promotion_expires_at;
     public string currency; public string version; public string checksum_sha256; public string download_url; public string purchase_url; public PortableLocalSupport local;
   }
 
@@ -902,6 +925,7 @@ namespace RacinageFreeDesktop {
       byte[] bundle;
       using (WebClient client = new WebClient()) {
         client.Headers[HttpRequestHeader.UserAgent] = "RacinageFreePortable/" + PortablePaths.Version;
+        client.Headers["X-Racinage-Download-Client"] = store.DownloadClientToken;
         bundle = client.DownloadData(uri);
       }
       if (bundle.Length < 1 || bundle.Length > 25 * 1024 * 1024) return "The plugin bundle exceeds the local size limit.";
@@ -967,6 +991,7 @@ namespace RacinageFreeDesktop {
     private readonly string dbPath = Path.Combine(PortablePaths.DataDir, "racinage-free.sqlite");
     private string deviceId;
     private string csrfToken;
+    private string downloadClientToken;
     private string protectionNote = "pending";
 
     internal string DatabasePath { get { return dbPath; } }
@@ -983,6 +1008,12 @@ namespace RacinageFreeDesktop {
         return csrfToken;
       }
     }
+    internal string DownloadClientToken {
+      get {
+        if (downloadClientToken == null) downloadClientToken = GetOrCreateProtectedToken("download-client.token");
+        return downloadClientToken;
+      }
+    }
 
     internal void Initialize() {
       using (SqliteDb db = Open()) {
@@ -994,6 +1025,7 @@ namespace RacinageFreeDesktop {
         db.Exec("CREATE TABLE IF NOT EXISTS media_baselines (relative_path TEXT PRIMARY KEY, sha256 TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)");
         db.Exec("CREATE TABLE IF NOT EXISTS media_deletes (relative_path TEXT PRIMARY KEY, deleted_at TEXT NOT NULL, origin_device TEXT NOT NULL)");
         db.Exec("CREATE TABLE IF NOT EXISTS plugin_installs (slug TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, checksum_sha256 TEXT NOT NULL, entrypoint TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'enabled', installed_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+        if (!HasColumn(db, "plugin_installs", "bridge_operations")) db.Exec("ALTER TABLE plugin_installs ADD COLUMN bridge_operations TEXT NOT NULL DEFAULT ''");
         if (!HasColumn(db, "users", "display_currency")) db.Exec("ALTER TABLE users ADD COLUMN display_currency TEXT NOT NULL DEFAULT 'USD'");
         db.Exec("CREATE TABLE IF NOT EXISTS local_currency_rates (code TEXT PRIMARY KEY, name TEXT NOT NULL, rate REAL NOT NULL CHECK(rate > 0), updated_at TEXT NOT NULL)");
         db.Exec("INSERT OR IGNORE INTO local_currency_rates(code,name,rate,updated_at)VALUES('USD','United States Dollar',1,'" + Now() + "')");
@@ -1001,6 +1033,7 @@ namespace RacinageFreeDesktop {
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_records ON local_plugin_records(slug,workspace_long_id,record_type,status)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_attachments (slug TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL,transaction_long_id TEXT NOT NULL,relative_path TEXT NOT NULL,original_name TEXT NOT NULL,mime_type TEXT NOT NULL,file_size INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,long_id))");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_attachments ON local_plugin_attachments(slug,transaction_long_id,status)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_settings (slug TEXT NOT NULL,setting_key TEXT NOT NULL,setting_value TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,setting_key))");
       }
       EnsureBuiltinFinanceManager();
       ProtectDatabaseFile();
@@ -1024,8 +1057,8 @@ namespace RacinageFreeDesktop {
       string checksum=HashDirectory(destination),now=Now();
       using(SqliteDb db=Open()){
         Dictionary<string,string> row=db.QueryOne("SELECT status,installed_at FROM plugin_installs WHERE slug='finance-manager' LIMIT 1");
-        if(row==null)db.Execute("INSERT INTO plugin_installs(slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at)VALUES('finance-manager','Finance Manager','1.0.0',?,'index.html','enabled',?,?)",checksum,now,now);
-        else db.Execute("UPDATE plugin_installs SET name='Finance Manager',version='1.0.0',checksum_sha256=?,entrypoint='index.html',updated_at=? WHERE slug='finance-manager'",checksum,now);
+        if(row==null)db.Execute("INSERT INTO plugin_installs(slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at,bridge_operations)VALUES('finance-manager','Finance Manager','1.0.0',?,'index.html','enabled',?,?,'bootstrap,save,batch_save,delete,settings,attachment_upload,attachment_get,attachment_delete')",checksum,now,now);
+        else db.Execute("UPDATE plugin_installs SET name='Finance Manager',version='1.0.0',checksum_sha256=?,entrypoint='index.html',bridge_operations='bootstrap,save,batch_save,delete,settings,attachment_upload,attachment_get,attachment_delete',updated_at=? WHERE slug='finance-manager'",checksum,now);
       }
     }
 
@@ -1040,16 +1073,60 @@ namespace RacinageFreeDesktop {
     }
 
     internal object LocalPluginAction(string slug,string action,Dictionary<string,object> payload) {
-      if(slug!="finance-manager")throw new InvalidOperationException("This local plugin namespace is not available.");
-      if(action=="bootstrap")return FinanceBootstrap(slug);
-      if(action=="save")return FinanceSave(slug,payload);
-      if(action=="batch_save")return FinanceBatchSave(slug,payload);
-      if(action=="delete")return FinanceDelete(slug,payload);
-      if(action=="settings")return FinanceSettings(payload);
-      if(action=="attachment_upload")return FinanceAttachmentUpload(slug,payload);
-      if(action=="attachment_get")return FinanceAttachmentGet(slug,payload);
-      if(action=="attachment_delete")return FinanceAttachmentDelete(slug,payload);
-      throw new InvalidOperationException("Unknown local finance action.");
+      if(!PluginActionAllowed(slug,action))throw new InvalidOperationException("This local plugin operation is not authorized.");
+      if(slug=="finance-manager"){
+        if(action=="bootstrap")return FinanceBootstrap(slug);
+        if(action=="save")return FinanceSave(slug,payload);
+        if(action=="batch_save")return FinanceBatchSave(slug,payload);
+        if(action=="delete")return FinanceDelete(slug,payload);
+        if(action=="settings")return FinanceSettings(payload);
+        if(action=="attachment_upload")return FinanceAttachmentUpload(slug,payload);
+        if(action=="attachment_get")return FinanceAttachmentGet(slug,payload);
+        if(action=="attachment_delete")return FinanceAttachmentDelete(slug,payload);
+      }
+      if(slug=="namegen"){
+        if(action=="bootstrap")return NameGenBootstrap(slug);
+        if(action=="save_record")return NameGenSaveRecord(slug,payload);
+        if(action=="delete_record")return NameGenDeleteRecord(slug,payload);
+        if(action=="save_setting")return NameGenSaveSetting(slug,payload);
+        if(action=="export_data")return NameGenExport(slug);
+        if(action=="import_data")return NameGenImport(slug,payload);
+      }
+      throw new InvalidOperationException("Unknown local plugin action.");
+    }
+
+    private bool PluginActionAllowed(string slug,string action){
+      if(!PluginCatalogClient.ValidSlug(slug)||String.IsNullOrWhiteSpace(action))return false;
+      using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT bridge_operations FROM plugin_installs WHERE slug=? AND status='enabled' LIMIT 1",slug);if(row==null)return false;return (row["bridge_operations"]??"").Split(',').Contains(action);}
+    }
+    private object NameGenBootstrap(string slug){
+      using(SqliteDb db=Open()){List<Dictionary<string,object> > records=new List<Dictionary<string,object> >();foreach(Dictionary<string,string> row in db.Query("SELECT record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at FROM local_plugin_records WHERE slug=? AND status!='deleted' ORDER BY created_at,long_id",slug)){Dictionary<string,object> item=new Dictionary<string,object>();foreach(KeyValuePair<string,string> pair in row)item[pair.Key]=pair.Value;item["version"]=ToInt(row["version"]);item["data"]=json.DeserializeObject(row["data_json"]);item.Remove("data_json");records.Add(item);}Dictionary<string,object> settings=new Dictionary<string,object>();foreach(Dictionary<string,string> row in db.Query("SELECT setting_key,setting_value FROM local_plugin_settings WHERE slug=?",slug))settings[row["setting_key"]]=row["setting_value"];return new Dictionary<string,object>{{"records",records},{"settings",settings}};}
+    }
+    private static readonly string[] NameGenRecordTypes={"custom_names","favorites","projects","groups","project_names","group_names","ratings","notes","avoid"};
+    private object NameGenSaveRecord(string slug,Dictionary<string,object> payload){
+      string type=SafeType(GetString(payload,"record_type")),workspace=SafeLongId(GetString(payload,"workspace_long_id")),requestedLongId=SafeLongId(GetString(payload,"long_id")),importLongId=SafeLongId(GetString(payload,"import_long_id"));Dictionary<string,object> values=GetObject(payload,"data");if(!NameGenRecordTypes.Contains(type))throw new InvalidDataException("Unknown NameGen record type.");if(requestedLongId!=""&&importLongId!="")throw new InvalidDataException("The NameGen record identifier is invalid.");
+      if((type=="custom_names"&&GetString(values,"name").Trim()=="")||((type=="projects"||type=="groups")&&GetString(values,"title").Trim()==""))throw new InvalidDataException("A name or title is required.");
+      if((type=="project_names"||type=="group_names")&&workspace=="")throw new InvalidDataException("The destination collection is unavailable.");
+      if(new[]{"favorites","project_names","group_names","ratings","notes","avoid"}.Contains(type)&&GetString(values,"name_id").Trim()=="")throw new InvalidDataException("The selected name is unavailable.");
+      if(type=="ratings"&&(GetLong(values,"rating")<1||GetLong(values,"rating")>5))throw new InvalidDataException("A personal rating must be between 1 and 5.");if(json.Serialize(values).Length>50000)throw new InvalidDataException("The NameGen record is too large.");
+      using(SqliteDb db=Open()){
+        if(type=="project_names"||type=="group_names"){string collectionType=type=="project_names"?"projects":"groups";if(db.QueryOne("SELECT 1 available FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND status='active' LIMIT 1",slug,collectionType,workspace)==null)throw new InvalidDataException("The destination collection is unavailable.");}
+        string now=Now(),encoded=json.Serialize(values);
+        if(requestedLongId!=""){if(db.Execute("UPDATE local_plugin_records SET workspace_long_id=?,data_json=?,version=version+1,updated_at=? WHERE slug=? AND record_type=? AND long_id=? AND status='active'",workspace,encoded,now,slug,type,requestedLongId)<1)throw new InvalidDataException("The NameGen record is unavailable.");ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",requestedLongId}};}
+        if(ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND record_type=? AND status='active'",slug,type))>=5000)throw new InvalidOperationException("The local NameGen record limit was reached.");
+        if(new[]{"favorites","project_names","group_names","ratings","notes","avoid"}.Contains(type)){string nameId=GetString(values,"name_id");Dictionary<string,string> duplicate=db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type=? AND workspace_long_id=? AND status='active' AND json_extract(data_json,'$.name_id')=? LIMIT 1",slug,type,workspace,nameId);if(duplicate!=null)return new Dictionary<string,object>{{"long_id",duplicate["long_id"]}};}
+        string longId=importLongId!=""?importLongId:NewLongId(type);Dictionary<string,string> collision=db.QueryOne("SELECT record_type FROM local_plugin_records WHERE slug=? AND long_id=? LIMIT 1",slug,longId);if(collision!=null){if(collision["record_type"]==type){db.Execute("UPDATE local_plugin_records SET workspace_long_id=?,data_json=?,status='active',version=version+1,updated_at=? WHERE slug=? AND record_type=? AND long_id=?",workspace,encoded,now,slug,type,longId);ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",longId}};}longId=NewLongId(type);}
+        db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,type,longId,workspace,encoded,now,now);ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",longId}};
+      }
+    }
+    private object NameGenDeleteRecord(string slug,Dictionary<string,object> payload){string longId=SafeLongId(GetString(payload,"long_id"));using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT record_type FROM local_plugin_records WHERE slug=? AND long_id=? AND status='active' LIMIT 1",slug,longId);db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND long_id=? AND status='active'",Now(),slug,longId);if(row!=null&&(row["record_type"]=="projects"||row["record_type"]=="groups"))db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND status='active'",Now(),slug,longId);}ProtectDatabaseFile();return new Dictionary<string,object>{{"deleted",true}};}
+    private object NameGenSaveSetting(string slug,Dictionary<string,object> payload){string key=SafeType(GetString(payload,"key")),value=GetString(payload,"value");if(key==""||value.Length>500)throw new InvalidDataException("The NameGen setting is invalid.");using(SqliteDb db=Open())db.Execute("INSERT OR REPLACE INTO local_plugin_settings(slug,setting_key,setting_value,updated_at)VALUES(?,?,?,?)",slug,key,value,Now());ProtectDatabaseFile();return new Dictionary<string,object>{{"saved",true}};}
+    private object NameGenExport(string slug){return NameGenBootstrap(slug);}
+    private object NameGenImport(string slug,Dictionary<string,object> payload){
+      Dictionary<string,object> incoming=GetObject(payload,"data");object raw;object[] records=incoming.TryGetValue("records",out raw)?raw as object[]:null;int inserted=0;Dictionary<string,string> idMap=new Dictionary<string,string>();
+      if(records!=null)foreach(bool relationsOnly in new[]{false,true})foreach(object value in records.Take(5000)){Dictionary<string,object> row=value as Dictionary<string,object>;if(row==null)continue;string type=SafeType(GetString(row,"record_type"));bool relation=type=="project_names"||type=="group_names";if(relation!=relationsOnly||!NameGenRecordTypes.Contains(type))continue;string oldId=SafeLongId(GetString(row,"long_id")),oldWorkspace=SafeLongId(GetString(row,"workspace_long_id")),workspace=idMap.ContainsKey(oldWorkspace)?idMap[oldWorkspace]:oldWorkspace;Dictionary<string,object> values=GetObject(row,"data");Dictionary<string,object> saved=NameGenSaveRecord(slug,new Dictionary<string,object>{{"record_type",type},{"workspace_long_id",workspace},{"import_long_id",oldId},{"data",values}}) as Dictionary<string,object>;if(oldId!=""&&saved!=null)idMap[oldId]=Convert.ToString(saved["long_id"],CultureInfo.InvariantCulture);inserted++;}
+      Dictionary<string,object> settings=GetObject(incoming,"settings");foreach(KeyValuePair<string,object> setting in settings.Take(30))NameGenSaveSetting(slug,new Dictionary<string,object>{{"key",setting.Key},{"value",Convert.ToString(setting.Value,CultureInfo.InvariantCulture)}});
+      return new Dictionary<string,object>{{"inserted",inserted}};
     }
 
     private object FinanceBootstrap(string slug) {
@@ -1303,7 +1380,8 @@ namespace RacinageFreeDesktop {
     internal void SavePluginInstall(PortablePluginInfo plugin, string entrypoint) {
       using (SqliteDb db = Open()) {
         string now = Now();
-        db.Execute("INSERT OR REPLACE INTO plugin_installs (slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at) VALUES (?,?,?,?,?,'enabled',COALESCE((SELECT installed_at FROM plugin_installs WHERE slug=?),?),?)", plugin.slug, plugin.name, plugin.version, plugin.checksum_sha256, entrypoint, plugin.slug, now, now);
+        string operations=plugin.local!=null&&plugin.local.operations!=null?String.Join(",",plugin.local.operations):"";if(plugin.slug=="finance-manager"&&operations=="")operations="bootstrap,save,batch_save,delete,settings,attachment_upload,attachment_get,attachment_delete";
+        db.Execute("INSERT OR REPLACE INTO plugin_installs (slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at,bridge_operations) VALUES (?,?,?,?,?,'enabled',COALESCE((SELECT installed_at FROM plugin_installs WHERE slug=?),?),?,?)", plugin.slug, plugin.name, plugin.version, plugin.checksum_sha256, entrypoint, plugin.slug, now, now,operations);
       }
       ProtectDatabaseFile();
     }
@@ -1316,6 +1394,8 @@ namespace RacinageFreeDesktop {
       if (!PluginCatalogClient.ValidSlug(slug)||!new[]{"enabled","hidden"}.Contains(status)) return;
       using (SqliteDb db = Open()) db.Execute("UPDATE plugin_installs SET status=?,updated_at=? WHERE slug=?",status,Now(),slug);
     }
+    internal void UninstallPlugin(string slug,bool deleteData){if(!PluginCatalogClient.ValidSlug(slug)||slug=="finance-manager")return;using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{db.Execute("UPDATE plugin_installs SET status='uninstalled',updated_at=? WHERE slug=?",Now(),slug);if(deleteData){db.Execute("DELETE FROM local_plugin_records WHERE slug=?",slug);db.Execute("DELETE FROM local_plugin_settings WHERE slug=?",slug);db.Execute("DELETE FROM local_plugin_attachments WHERE slug=?",slug);}db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}ProtectDatabaseFile();}
+    internal string PluginName(string slug){using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT name FROM plugin_installs WHERE slug=? LIMIT 1",slug);return row==null?CultureInfo.InvariantCulture.TextInfo.ToTitleCase(slug.Replace('-',' ')):row["name"];}}
 
     internal string PluginEntrypoint(string slug) {
       if (!PluginCatalogClient.ValidSlug(slug)) return "";
