@@ -1,0 +1,249 @@
+.portable-ai-toggle {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 13;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #b7cdd2;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.portable-ai-toggle svg,
+.portable-ai-head svg {
+  width: 24px;
+  height: 24px;
+}
+
+.portable-ai-sidebar {
+  position: fixed;
+  top: 58px;
+  right: 0;
+  bottom: 0;
+  z-index: 12;
+  width: min(390px, 100vw);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border-left: 1px solid #cbdade;
+  background: #fff;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(24px);
+  transition: opacity 180ms ease-in, transform 180ms ease-in, visibility 0s linear 180ms;
+}
+
+.portable-ai-shell.is-open .portable-ai-sidebar {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+  transition: opacity 220ms ease-in, transform 220ms ease-in;
+}
+
+.portable-ai-head {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dbe5ea;
+}
+
+.portable-ai-head div {
+  flex: 1;
+}
+
+.portable-ai-head strong,
+.portable-ai-head small {
+  display: block;
+}
+
+.portable-ai-head small {
+  margin-top: 3px;
+  color: #6d7c7d;
+}
+
+.portable-ai-close {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #cbdade;
+  border-radius: 9px;
+  background: transparent;
+  color: #004650;
+  cursor: pointer;
+}
+
+.portable-ai-messages {
+  overflow: auto;
+  padding: 14px;
+}
+
+.portable-ai-message,
+.portable-ai-preview {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid #dbe5ea;
+  border-radius: 10px;
+  background: #f8fbfc;
+}
+
+.portable-ai-message.user {
+  border-color: #aac7cd;
+  background: #f0f8fa;
+}
+
+.portable-ai-message strong,
+.portable-ai-message p,
+.portable-ai-preview strong,
+.portable-ai-preview p {
+  display: block;
+  margin: 0;
+}
+
+.portable-ai-message p,
+.portable-ai-preview p {
+  margin-top: 6px;
+  line-height: 1.48;
+  white-space: pre-wrap;
+}
+
+.portable-ai-preview {
+  border-color: #dba86d;
+  background: #fff8ef;
+}
+
+.portable-ai-preview pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 10px 0;
+  padding: 9px;
+  border: 1px solid #ead8c4;
+  border-radius: 8px;
+  background: #fff;
+  font: 12px/1.4 Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+.portable-ai-compose {
+  padding: 12px;
+  border-top: 1px solid #dbe5ea;
+}
+
+.portable-ai-compose textarea {
+  min-height: 84px;
+}
+
+.portable-ai-compose-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.portable-ai-status,
+.local-ai-setup-status {
+  margin: 0;
+  color: #6d7c7d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.portable-ai-status {
+  flex: 1;
+}
+
+.portable-ai-status.error,
+.local-ai-setup-status.error {
+  color: #9b2525;
+}
+
+.portable-ai-status.success,
+.local-ai-setup-status.success {
+  color: #176a43;
+}
+
+.portable-ai-status.notice,
+.local-ai-setup-status.notice {
+  color: #8b5700;
+}
+
+.local-ai-setup {
+  display: grid;
+  gap: 14px;
+}
+
+.local-ai-provider-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.local-ai-provider-cards label {
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid #dbe5ea;
+  border-radius: 10px;
+  background: #fbfdfd;
+}
+
+.local-ai-provider-cards input {
+  width: auto;
+}
+
+.local-ai-provider-cards strong,
+.local-ai-provider-cards small {
+  display: block;
+}
+
+.local-ai-provider-cards small {
+  margin-top: 5px;
+  color: #6d7c7d;
+  font-weight: 500;
+}
+
+.local-ai-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.local-ai-privacy {
+  padding: 12px;
+  border: 1px solid #dbe5ea;
+  border-radius: 10px;
+  background: #f8fbfc;
+}
+
+.local-ai-privacy h3,
+.local-ai-privacy p {
+  margin: 0;
+}
+
+.local-ai-privacy p {
+  margin-top: 6px;
+  color: #6d7c7d;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .portable-ai-sidebar {
+    top: 0;
+    width: 100vw;
+  }
+
+  .local-ai-provider-cards,
+  .local-ai-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portable-ai-sidebar,
+  .portable-ai-shell.is-open .portable-ai-sidebar {
+    transition-duration: 0.01ms;
+  }
+}

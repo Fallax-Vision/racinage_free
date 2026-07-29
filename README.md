@@ -2,6 +2,8 @@
 
 Racinage Free is the open-source Windows portable edition of Racinage for the Lite Free plan. It runs locally on one Windows device and stores family data under `%LOCALAPPDATA%\Racinage Free`. The optional Plugins tab connects only to the signed public Racinage plugin catalog and hosted purchase pages; it does not connect the local family database to the hosted Racinage database.
 
+The source tree is now `v0.16.0` and includes an optional local AI assistant for Ollama, LM Studio, and custom OpenAI-compatible loopback servers. The latest published, signed executable remains `v0.15.0` until the trusted Windows signing release gate is configured.
+
 ![Finance Manager running fully offline in Racinage Free](docs/images/racinage-free-finance-manager.png)
 
 ![NameGen helping parents discover names offline](docs/images/racinage-free-namegen.png)
@@ -17,6 +19,8 @@ Racinage Free is the open-source Windows portable edition of Racinage for the Li
 - Native C# WinForms/WebView2 host.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- First-class Ollama, LM Studio, and custom local OpenAI-compatible setup, model discovery, capability testing, streaming chat, and typed local change previews.
+- Strict loopback-only AI endpoints with no cloud fallback. Optional local provider tokens are protected for the current Windows user with DPAPI.
 - Preinstalled Finance Manager with offline workspaces, accounts, transactions, budgets, goals, debts, investments, forecasts, reports, circles, imports, exports, and private attachments.
 - Installable completely free NameGen companion for parents, with a bundled offline name finder, custom names, favorites, personal ratings and notes, private groups, solo baby projects, and JSON import/export.
 - User display currency and manually maintained offline currency rates.
@@ -41,14 +45,16 @@ Requirements:
 Build:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racinage-free.ps1
+powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racinage-free.ps1 -Development
 ```
 
 Output:
 
 ```text
-releases\desktop\racinage-free-v0.15.0\RacinageFree-v0.15.0.exe
+desktop\RacinageFree\dist\development\RacinageFree-v0.16.0-dev.exe
 ```
+
+Development builds are intentionally unsigned and are not release artifacts. Public `v0.16.0` builds require the protected `RACINAGE_WINDOWS_SIGNTOOL` plus a signing certificate path or thumbprint; the build verifies signatures on both the native host and bootstrapper.
 
 ## Local Data
 
@@ -61,9 +67,10 @@ Racinage Free keeps mutable data outside the executable:
 %LOCALAPPDATA%\Racinage Free\webview
 %LOCALAPPDATA%\Racinage Free\plugins
 %LOCALAPPDATA%\Racinage Free\plugin-cache
+%LOCALAPPDATA%\Racinage Free\ai
 ```
 
-Refreshing or rebuilding the same version preserves local data.
+Refreshing or rebuilding the same version preserves local data. Portable AI never synchronizes or exposes the local SQLite database to hosted Racinage.
 
 ## Repository
 

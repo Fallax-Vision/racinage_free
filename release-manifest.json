@@ -1,5 +1,7 @@
 {
   "name": "Racinage Free",
+  "source_version": "0.16.0",
+  "source_release_status": "blocked_until_trusted_windows_signing_is_configured",
   "version": "0.15.0",
   "tag": "racinage-free-v0.15.0",
   "artifact": "releases/desktop/racinage-free-v0.15.0/RacinageFree-v0.15.0.exe",

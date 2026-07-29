@@ -83,7 +83,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.15.0";
+    internal const string Version = "0.16.0";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -360,6 +360,7 @@ namespace RacinageFreeDesktop {
 
   internal sealed class LocalServer {
     private readonly LocalStore store;
+    private readonly PortableAiService ai;
     private readonly PluginCatalogClient pluginCatalog = new PluginCatalogClient();
     private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     private HttpListener listener;
@@ -371,6 +372,7 @@ namespace RacinageFreeDesktop {
 
     internal LocalServer(LocalStore store) {
       this.store = store;
+      ai = new PortableAiService(store);
     }
 
     internal void Start() {
@@ -421,12 +423,15 @@ namespace RacinageFreeDesktop {
         }
         if (path == "/fonts/inter/InterVariable.woff2") { WriteFile(context, "fonts\\inter\\InterVariable.woff2", "font/woff2"); return; }
         if (path == "/fonts/inter/InterVariable-Italic.woff2") { WriteFile(context, "fonts\\inter\\InterVariable-Italic.woff2", "font/woff2"); return; }
+        if (path == "/assets/ai-assistant.css") { WriteFile(context, "assets\\ai-assistant.css", "text/css; charset=utf-8"); return; }
+        if (path == "/assets/ai-assistant.js") { WriteFile(context, "assets\\ai-assistant.js", "application/javascript; charset=utf-8"); return; }
         if (path == "/health") { WriteJson(context, "{\"ok\":true,\"product\":\"Racinage Free\",\"version\":\"" + PortablePaths.Version + "\"}"); return; }
         if (path == "/upgrade") { Redirect(context, PortablePaths.PricingUrl); return; }
         if (path == "/login") { Login(context); return; }
         if (path == "/start-free") { StartFree(context); return; }
         if (path == "/family") { Family(context); return; }
-        if (path == "/manage" || path == "/manage/plugins" || path == "/manage/family" || path == "/manage/settings") { Manage(context, path); return; }
+        if (path == "/manage" || path == "/manage/plugins" || path == "/manage/family" || path == "/manage/settings" || path == "/manage/ai") { Manage(context, path); return; }
+        if (path == "/local-ai-api") { LocalAiApi(context); return; }
         if (path.StartsWith("/local-plugin-api/", StringComparison.OrdinalIgnoreCase)) { LocalPluginApi(context, path.Substring(18)); return; }
         if (path.StartsWith("/plugin/", StringComparison.OrdinalIgnoreCase)) { PortablePlugin(context, path.Substring(8)); return; }
         if (path == "/logout") { store.ClearSession(); ExpireCookie(context); Redirect(context, "/"); return; }
@@ -601,7 +606,7 @@ namespace RacinageFreeDesktop {
         "<button class='button' type='submit'>Add person</button></form></article>" +
         "</section>" +
         "<section class='panel wide'><div class='panelhead'><div><h2>Family records</h2><p>" + people.Count.ToString(CultureInfo.InvariantCulture) + " people saved locally.</p></div></div>" + shareButtons + rows.ToString() + "</section>" +
-        UpgradeModal();
+        UpgradeModal() + PortableAiShell("family");
       return Page("Family", body);
     }
 
@@ -633,10 +638,11 @@ namespace RacinageFreeDesktop {
     }
 
     private string ManagePage(string path, string message) {
-      string active = path.EndsWith("/plugins", StringComparison.OrdinalIgnoreCase) ? "plugins" : (path.EndsWith("/settings", StringComparison.OrdinalIgnoreCase) ? "settings" : (path.EndsWith("/family", StringComparison.OrdinalIgnoreCase) ? "family" : "account"));
-      string tabs = "<nav class='manage-tabs' aria-label='Manage sections'>" + ManageTab("/manage", "Account", active == "account") + ManageTab("/manage/family", "Family", active == "family") + ManageTab("/manage/plugins", "Plugins", active == "plugins") + ManageTab("/manage/settings", "Settings", active == "settings") + "</nav>";
+      string active = path.EndsWith("/plugins", StringComparison.OrdinalIgnoreCase) ? "plugins" : (path.EndsWith("/settings", StringComparison.OrdinalIgnoreCase) ? "settings" : (path.EndsWith("/family", StringComparison.OrdinalIgnoreCase) ? "family" : (path.EndsWith("/ai", StringComparison.OrdinalIgnoreCase) ? "ai" : "account")));
+      string tabs = "<nav class='manage-tabs' aria-label='Manage sections'>" + ManageTab("/manage", "Account", active == "account") + ManageTab("/manage/family", "Family", active == "family") + ManageTab("/manage/plugins", "Plugins", active == "plugins") + ManageTab("/manage/ai", "AI Features", active == "ai") + ManageTab("/manage/settings", "Settings", active == "settings") + "</nav>";
       string content;
       if (active == "plugins") content = PluginsPanel();
+      else if (active == "ai") content = PortableAiSetup();
       else if (active == "family") {
         Dictionary<string, string> family = store.GetFamily();
         content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family records</a></div><dl class='facts'><div><dt>Name</dt><dd>" + H(family["name"]) + "</dd></div><div><dt>Location</dt><dd>" + H(family["location"] == "" ? "Not set" : family["location"]) + "</dd></div></dl></section>";
@@ -646,8 +652,80 @@ namespace RacinageFreeDesktop {
       } else {
         content = "<section class='manage-grid'><article class='manage-card'><h2>Local account</h2><p>One local user owns this device's family records. Collaborative members and invitations are intentionally unavailable.</p><a class='button ghost' href='/family'>Open dashboard</a></article><article class='manage-card'><h2>Plan</h2><p>Lite Free limits apply to local features. Reviewed plugins can add Free features, while optional Pro features are purchased through the publisher's hosted Racinage page.</p><a class='button' href='" + PortablePaths.PricingUrl + "'>View Racinage plans</a></article></section>";
       }
-      string body = "<section class='manage-head'><div><p class='kicker'>Manage</p><h1>Account and features</h1><p>Manage the local account using the same clear sections as the hosted app, without collaborative controls.</p></div></section>" + tabs + ErrorHtml(message) + "<div class='manage-content'>" + content + "</div>";
+      string body = "<section class='manage-head'><div><p class='kicker'>Manage</p><h1>Account and features</h1><p>Manage the local account using the same clear sections as the hosted app, without collaborative controls.</p></div></section>" + tabs + ErrorHtml(message) + "<div class='manage-content'>" + content + "</div>" + PortableAiShell(active);
       return Page("Manage", body);
+    }
+
+    private string PortableAiSetup() {
+      Dictionary<string, object> status = ai.Status();
+      string provider = Convert.ToString(status["provider"], CultureInfo.InvariantCulture);
+      string endpoint = Convert.ToString(status["endpoint"], CultureInfo.InvariantCulture);
+      string model = Convert.ToString(status["model"], CultureInfo.InvariantCulture);
+      string readiness = Convert.ToString(status["readiness"], CultureInfo.InvariantCulture);
+      return "<section class='manage-card'><div class='manage-card-head'><div><h2>Local AI providers</h2><p>Ollama, LM Studio, and custom OpenAI-compatible loopback servers are first-class local providers.</p></div><span class='status-pill'>" + H(readiness.Replace('_', ' ')) + "</span></div>"
+        + "<form class='local-ai-setup' data-portable-ai-setup><div class='local-ai-provider-cards'>"
+        + LocalProviderOption("ollama", "Ollama", "Native /api/tags discovery and /api/chat tools.", provider)
+        + LocalProviderOption("lmstudio", "LM Studio", "OpenAI-compatible model discovery and tools.", provider)
+        + LocalProviderOption("custom", "Advanced custom local", "A loopback OpenAI-compatible server.", provider)
+        + "</div><div class='local-ai-form-grid'><label>Local endpoint<input name='endpoint' value='" + A(endpoint) + "' required></label>"
+        + "<label>Model<input name='model' value='" + A(model) + "' list='portableAiModels' required><datalist id='portableAiModels' data-portable-ai-models></datalist></label>"
+        + "<label>Optional local token<input name='token' type='password' autocomplete='off' placeholder='Stored with Windows DPAPI'></label></div>"
+        + "<div class='actions'><button class='button ghost' type='submit' data-local-ai-action='discover'>Discover models</button><button class='button ghost' type='submit' data-local-ai-action='save'>Save setup</button><button class='button' type='submit' data-local-ai-action='test'>Test capabilities</button></div>"
+        + "<p class='local-ai-setup-status' data-portable-ai-setup-status>Provider tests verify reachability, model discovery, and a native structured tool round-trip. Models that fail remain available for writing and questions, but cannot prepare CRUD actions.</p></form></section>"
+        + "<section class='manage-grid'><article class='manage-card local-ai-privacy'><h3>Local privacy boundary</h3><p>Only localhost, 127.0.0.1, or ::1 are accepted. Redirects and remote resolution are rejected. The optional token is protected for the current Windows user with DPAPI and is never uploaded.</p></article>"
+        + "<article class='manage-card local-ai-privacy'><h3>Portable scope</h3><p>The assistant can work with the one local family, people, low-risk settings, and reviewed portable plugins. It does not claim hosted Gallery, Events, Projects, or Trees modules.</p></article>"
+        + "<article class='manage-card local-ai-privacy'><h3>Hosted companion</h3><p>Pairing and hosted job execution remain unavailable in public builds until the server feature gate and trusted Windows code-signing release gate are approved.</p></article></section>";
+    }
+
+    private static string LocalProviderOption(string value, string title, string description, string selected) {
+      return "<label><input type='radio' name='provider' value='" + A(value) + "'" + (selected == value ? " checked" : "") + "><span><strong>" + H(title) + "</strong><small>" + H(description) + "</small></span></label>";
+    }
+
+    private void LocalAiApi(HttpListenerContext context) {
+      if (!IsAuthenticated(context) || context.Request.HttpMethod != "POST"
+          || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])) {
+        WriteJson(context, "{\"ok\":false,\"message\":\"The local AI session is unavailable.\"}", 403);
+        return;
+      }
+      if (context.Request.ContentLength64 < 1 || context.Request.ContentLength64 > 256 * 1024) {
+        WriteJson(context, "{\"ok\":false,\"message\":\"The local AI request is too large.\"}", 413);
+        return;
+      }
+      try {
+        string body;
+        using (StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+        Dictionary<string, object> request = json.Deserialize<Dictionary<string, object> >(body) ?? new Dictionary<string, object>();
+        string action = request.ContainsKey("action") ? Convert.ToString(request["action"], CultureInfo.InvariantCulture) : "";
+        Dictionary<string, object> data;
+        if (action == "status") data = ai.Status();
+        else if (action == "save_config") data = ai.SaveConfig(request);
+        else if (action == "discover") data = ai.Discover(request);
+        else if (action == "test") data = ai.Test(request);
+        else if (action == "chat") data = ai.Chat(request);
+        else if (action == "apply") data = ai.Apply(request);
+        else throw new InvalidOperationException("Unknown local AI action.");
+        WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", true }, { "data", data } }));
+      } catch (Exception error) {
+        Program.Log("Local AI action failed without prompt payload logging: " + error.GetType().Name);
+        WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", false }, { "message", error.Message } }), 400);
+      }
+    }
+
+    private string PortableAiShell(string page) {
+      string icon = "<svg viewBox='0 0 20 20' aria-hidden='true'><defs><linearGradient id='portableAiGradient' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#7357ff'/><stop offset='.34' stop-color='#00a6c8'/><stop offset='.68' stop-color='#21a35b'/><stop offset='1' stop-color='#e5952f'/></linearGradient></defs><g fill='url(#portableAiGradient)'>"
+        + "<path d='M9.997,13.867c-0.388,0-0.702,0.315-0.702,0.702v4.335c0,0.387,0.314,0.702,0.702,0.702c0.388,0,0.702-0.315,0.702-0.702v-4.335C10.698,14.182,10.384,13.867,9.997,13.867z'></path><path d='M9.997,6.133c0.388,0,0.702-0.315,0.702-0.702V1.096c0-0.386-0.314-0.702-0.702-0.702c-0.388,0-0.702,0.316-0.702,0.702v4.335C9.295,5.818,9.609,6.133,9.997,6.133z'></path>"
+        + "<path d='M12.89,13.604c-0.193-0.334-0.621-0.449-0.958-0.256c-0.335,0.193-0.45,0.623-0.256,0.958l1.568,2.719c0.129,0.224,0.364,0.35,0.607,0.35c0.119,0,0.24-0.03,0.351-0.094c0.336-0.193,0.451-0.624,0.257-0.958L12.89,13.604z'></path><path d='M7.107,6.394c0.129,0.225,0.366,0.351,0.607,0.351c0.119,0,0.239-0.031,0.35-0.095c0.336-0.193,0.451-0.623,0.256-0.958L6.753,2.976C6.561,2.639,6.13,2.527,5.796,2.72C5.46,2.913,5.345,3.344,5.54,3.678L7.107,6.394z'></path>"
+        + "<path d='M6.13,10c0-0.389-0.314-0.702-0.702-0.702H1.096c-0.388,0-0.702,0.312-0.702,0.702c0,0.386,0.314,0.702,0.702,0.702h4.333C5.816,10.702,6.13,10.386,6.13,10z'></path><path d='M18.901,9.299h-4.335c-0.388,0-0.702,0.312-0.702,0.702c0,0.386,0.314,0.702,0.702,0.702h4.335c0.388,0,0.702-0.316,0.702-0.702C19.602,9.611,19.289,9.299,18.901,9.299z'></path>"
+        + "<path d='M9.997,6.755c-1.789,0-3.244,1.455-3.244,3.245c0,1.789,1.455,3.244,3.244,3.244c1.79,0,3.245-1.455,3.245-3.244C13.242,8.211,11.786,6.755,9.997,6.755z M9.997,11.842c-1.015,0-1.841-0.826-1.841-1.841c0-1.017,0.826-1.842,1.841-1.842c1.015,0,1.842,0.825,1.842,1.842C11.839,11.016,11.012,11.842,9.997,11.842z'></path>"
+        + "<path d='M17.021,13.245l-2.716-1.567c-0.334-0.192-0.765-0.077-0.958,0.258c-0.195,0.334-0.079,0.764,0.256,0.958l2.716,1.567c0.111,0.064,0.232,0.094,0.351,0.094c0.241,0,0.478-0.126,0.607-0.351C17.472,13.867,17.356,13.439,17.021,13.245z'></path><path d='M2.973,6.755l2.716,1.568C5.8,8.386,5.921,8.416,6.04,8.416c0.241,0,0.478-0.126,0.607-0.35c0.194-0.334,0.079-0.765-0.256-0.958L3.675,5.54C3.341,5.349,2.91,5.462,2.717,5.797C2.522,6.133,2.637,6.561,2.973,6.755z'></path>"
+        + "<path d='M13.347,8.066c0.128,0.224,0.366,0.35,0.607,0.35c0.119,0,0.24-0.03,0.351-0.093l2.716-1.568c0.335-0.194,0.451-0.622,0.256-0.959c-0.193-0.337-0.623-0.45-0.958-0.257l-2.716,1.568C13.268,7.301,13.152,7.731,13.347,8.066z'></path><path d='M6.647,11.935c-0.192-0.337-0.622-0.452-0.958-0.258l-2.716,1.567c-0.335,0.194-0.45,0.622-0.256,0.959c0.129,0.224,0.366,0.351,0.607,0.351c0.119,0,0.24-0.03,0.351-0.094l2.716-1.567C6.726,12.699,6.841,12.269,6.647,11.935z'></path>"
+        + "<path d='M11.931,6.65c0.111,0.064,0.232,0.095,0.351,0.095c0.241,0,0.478-0.126,0.607-0.351l1.567-2.716c0.194-0.334,0.079-0.765-0.257-0.958c-0.333-0.192-0.764-0.079-0.958,0.256l-1.568,2.716C11.481,6.026,11.596,6.457,11.931,6.65z'></path><path d='M8.065,13.348c-0.33-0.191-0.763-0.079-0.958,0.256l-1.57,2.719c-0.194,0.334-0.079,0.764,0.256,0.958c0.109,0.064,0.232,0.094,0.351,0.094c0.241,0,0.477-0.126,0.607-0.35l1.57-2.719C8.516,13.971,8.401,13.541,8.065,13.348z'></path></g></svg>";
+      string headIcon = icon.Replace("portableAiGradient", "portableAiGradientHead");
+      return "<div class='portable-ai-shell' data-portable-ai-shell data-page='" + A(page) + "' data-csrf='" + A(store.CsrfToken) + "'>"
+        + "<button class='portable-ai-toggle' type='button' data-portable-ai-open aria-label='Open local AI assistant'>" + icon + "</button>"
+        + "<aside class='portable-ai-sidebar' data-portable-ai-sidebar aria-hidden='true'><header class='portable-ai-head'>" + headIcon + "<div><strong>Local AI assistant</strong><small>Explicit loopback provider - no cloud fallback</small></div><button class='portable-ai-close' type='button' data-portable-ai-close aria-label='Close'>x</button></header>"
+        + "<div class='portable-ai-messages' data-portable-ai-messages><article class='portable-ai-message assistant'><strong>Local AI</strong><p>Ask about this local family, people, settings, or reviewed portable plugins. Confirmed changes use typed previews.</p></article></div>"
+        + "<form class='portable-ai-compose' data-portable-ai-chat-form><textarea data-portable-ai-input maxlength='12000' placeholder='Ask your local model...' required></textarea><div class='portable-ai-compose-actions'><p class='portable-ai-status' data-portable-ai-status></p><button class='button ghost' type='button' data-portable-ai-stop hidden>Stop</button><button class='button' type='submit'>Send</button></div></form></aside></div>";
     }
 
     private string PluginsPanel() {
@@ -774,9 +852,9 @@ namespace RacinageFreeDesktop {
 
     private string Page(string title, string body) {
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-        "<title>" + H(title) + " - Racinage Free</title><style>" + Css() + "</style></head><body>" +
+        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css'><style>" + Css() + "</style></head><body>" +
         "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
-        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + "</script></body></html>";
+        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + "</script><script src='/assets/ai-assistant.js'></script></body></html>";
     }
 
     private static string ErrorHtml(string error) {
@@ -1034,6 +1112,16 @@ namespace RacinageFreeDesktop {
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_attachments (slug TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL,transaction_long_id TEXT NOT NULL,relative_path TEXT NOT NULL,original_name TEXT NOT NULL,mime_type TEXT NOT NULL,file_size INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,long_id))");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_attachments ON local_plugin_attachments(slug,transaction_long_id,status)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_settings (slug TEXT NOT NULL,setting_key TEXT NOT NULL,setting_value TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,setting_key))");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_ai_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT,long_id TEXT NOT NULL UNIQUE,title_ciphertext TEXT NOT NULL,title_key_version INTEGER NOT NULL DEFAULT 1,is_pinned INTEGER NOT NULL DEFAULT 0,is_archived INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT NULL)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_conversations_state ON local_ai_conversations(is_archived,is_pinned,updated_at)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_ai_messages (id INTEGER PRIMARY KEY AUTOINCREMENT,conversation_id INTEGER NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),content_ciphertext TEXT NOT NULL,content_key_version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,deleted_at TEXT NULL,FOREIGN KEY(conversation_id) REFERENCES local_ai_conversations(id) ON DELETE CASCADE)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_messages_conversation ON local_ai_messages(conversation_id,id)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_ai_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,long_id TEXT NOT NULL UNIQUE,conversation_id INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('queued','running','paused','completed','failed','cancelled')),provider_kind TEXT NOT NULL,model TEXT NOT NULL DEFAULT '',state_ciphertext TEXT NOT NULL,state_key_version INTEGER NOT NULL DEFAULT 1,correlation_id TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(conversation_id) REFERENCES local_ai_conversations(id) ON DELETE CASCADE)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_runs_state ON local_ai_runs(status,updated_at)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_ai_tool_calls (id INTEGER PRIMARY KEY AUTOINCREMENT,run_id INTEGER NOT NULL,tool_name TEXT NOT NULL,tier INTEGER NOT NULL CHECK(tier BETWEEN 0 AND 3),arguments_ciphertext TEXT NOT NULL,result_ciphertext TEXT NOT NULL DEFAULT '',payload_key_version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL,idempotency_key TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(run_id) REFERENCES local_ai_runs(id) ON DELETE CASCADE)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_tool_calls_run ON local_ai_tool_calls(run_id,id)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_ai_usage_audits (id INTEGER PRIMARY KEY AUTOINCREMENT,correlation_id TEXT NOT NULL,provider_kind TEXT NOT NULL,model TEXT NOT NULL DEFAULT '',tool_name TEXT NOT NULL DEFAULT '',confirmation_outcome TEXT NOT NULL DEFAULT '',status TEXT NOT NULL,latency_ms INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_usage_audits_created ON local_ai_usage_audits(created_at)");
       }
       EnsureBuiltinFinanceManager();
       ProtectDatabaseFile();
@@ -1357,6 +1445,19 @@ namespace RacinageFreeDesktop {
         db.Execute("INSERT INTO people (full_name, relationship, birth_date, place, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", fullName, relationship, birthDate, place, notes, now, now);
         string id = Convert.ToString(db.Scalar("SELECT last_insert_rowid()"), CultureInfo.InvariantCulture);
         RecordChange(db, "people", id, "insert", HashText(fullName + "|" + relationship + "|" + birthDate + "|" + place + "|" + notes));
+      }
+      ProtectDatabaseFile();
+    }
+
+    internal void UpdatePerson(int id, string fullName, string relationship, string birthDate, string place, string notes) {
+      if (id <= 0 || fullName == "") throw new InvalidOperationException("Choose a valid local person and full name.");
+      using (SqliteDb db = Open()) {
+        string now = Now();
+        int changed = db.Execute(
+          "UPDATE people SET full_name = ?, relationship = ?, birth_date = ?, place = ?, notes = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+          fullName, relationship, birthDate, place, notes, now, id);
+        if (changed != 1) throw new InvalidOperationException("The selected local person was not found.");
+        RecordChange(db, "people", id.ToString(CultureInfo.InvariantCulture), "upsert", HashText(fullName + "|" + relationship + "|" + birthDate + "|" + place + "|" + notes));
       }
       ProtectDatabaseFile();
     }
