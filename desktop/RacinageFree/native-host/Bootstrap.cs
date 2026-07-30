@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace RacinageFreeBootstrap {
   internal static class Program {
-    private const string Version = "0.16.0";
+    private const string Version = "0.17.0";
     private const string AppName = "Racinage Free";
     private const string HostExe = "RacinageFreeHost.exe";
     private const string LauncherExe = "RacinageFree.exe";

@@ -83,7 +83,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.16.0";
+    internal const string Version = "0.17.0";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -129,6 +129,17 @@ namespace RacinageFreeDesktop {
   internal sealed class RacinageWindow : Form {
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
+    private const int WmNcHitTest = 0x0084;
+    private const int HtClient = 1;
+    private const int HtLeft = 10;
+    private const int HtRight = 11;
+    private const int HtTop = 12;
+    private const int HtTopLeft = 13;
+    private const int HtTopRight = 14;
+    private const int HtBottom = 15;
+    private const int HtBottomLeft = 16;
+    private const int HtBottomRight = 17;
+    private const int ResizeBorder = 7;
 
     private readonly LocalServer server;
     private readonly LocalStore store;
@@ -142,6 +153,7 @@ namespace RacinageFreeDesktop {
       this.server = server;
       this.store = store;
       Text = PortablePaths.AppName;
+      FormBorderStyle = FormBorderStyle.None;
       StartPosition = FormStartPosition.CenterScreen;
       MinimumSize = new Size(980, 620);
       Size = new Size(1180, 760);
@@ -164,10 +176,8 @@ namespace RacinageFreeDesktop {
         BackColor = Color.FromArgb(6, 38, 43),
         Padding = new Padding(12, 0, 10, 0)
       };
-      titleBar.MouseDown += delegate {
-        ReleaseCapture();
-        SendMessage(Handle, 0xA1, 0x2, 0);
-      };
+      titleBar.MouseDown += BeginWindowDrag;
+      titleBar.MouseDoubleClick += delegate { ToggleMaximize(); };
 
       Label title = new Label {
         Text = "Racinage Free",
@@ -177,6 +187,8 @@ namespace RacinageFreeDesktop {
         ForeColor = Color.White,
         Font = new Font("Segoe UI", 10.5f, FontStyle.Bold)
       };
+      title.MouseDown += BeginWindowDrag;
+      title.MouseDoubleClick += delegate { ToggleMaximize(); };
       titleBar.Controls.Add(title);
 
       FlowLayoutPanel actions = new FlowLayoutPanel {
@@ -191,7 +203,7 @@ namespace RacinageFreeDesktop {
       Button close = TitleButton("x");
       close.Click += delegate { Close(); };
       Button maximize = TitleButton("□");
-      maximize.Click += delegate { WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; };
+      maximize.Click += delegate { ToggleMaximize(); };
       Button minimize = TitleButton("-");
       minimize.Click += delegate { WindowState = FormWindowState.Minimized; };
       Button upgrade = UpgradeButton();
@@ -219,6 +231,60 @@ namespace RacinageFreeDesktop {
       actions.Controls.Add(upgrade);
       titleBar.Controls.Add(actions);
       Controls.Add(titleBar);
+    }
+
+    private void BeginWindowDrag(object sender, MouseEventArgs args) {
+      if (args.Button != MouseButtons.Left) return;
+      ReleaseCapture();
+      SendMessage(Handle, 0xA1, 0x2, 0);
+    }
+
+    private void ToggleMaximize() {
+      WindowState = WindowState == FormWindowState.Maximized
+        ? FormWindowState.Normal
+        : FormWindowState.Maximized;
+    }
+
+    protected override void OnHandleCreated(EventArgs args) {
+      base.OnHandleCreated(args);
+      UpdateMaximizedBounds();
+    }
+
+    protected override void OnLocationChanged(EventArgs args) {
+      base.OnLocationChanged(args);
+      if (WindowState == FormWindowState.Normal) UpdateMaximizedBounds();
+    }
+
+    private void UpdateMaximizedBounds() {
+      Screen screen = Screen.FromControl(this);
+      if (screen != null) MaximizedBounds = screen.WorkingArea;
+    }
+
+    protected override void WndProc(ref Message message) {
+      base.WndProc(ref message);
+      if (
+        message.Msg != WmNcHitTest
+        || WindowState != FormWindowState.Normal
+        || (int)message.Result != HtClient
+      ) return;
+
+      long packed = message.LParam.ToInt64();
+      Point pointer = PointToClient(new Point(
+        unchecked((short)(packed & 0xffff)),
+        unchecked((short)((packed >> 16) & 0xffff))));
+      bool left = pointer.X <= ResizeBorder;
+      bool right = pointer.X >= ClientSize.Width - ResizeBorder;
+      bool top = pointer.Y <= ResizeBorder;
+      bool bottom = pointer.Y >= ClientSize.Height - ResizeBorder;
+
+      if (left && top) message.Result = (IntPtr)HtTopLeft;
+      else if (right && top) message.Result = (IntPtr)HtTopRight;
+      else if (left && bottom) message.Result = (IntPtr)HtBottomLeft;
+      else if (right && bottom) message.Result = (IntPtr)HtBottomRight;
+      else if (left) message.Result = (IntPtr)HtLeft;
+      else if (right) message.Result = (IntPtr)HtRight;
+      else if (top) message.Result = (IntPtr)HtTop;
+      else if (bottom) message.Result = (IntPtr)HtBottom;
     }
 
     private static Button TitleButton(string text) {
@@ -361,6 +427,7 @@ namespace RacinageFreeDesktop {
   internal sealed class LocalServer {
     private readonly LocalStore store;
     private readonly PortableAiService ai;
+    private readonly ConnectedMessaging connected;
     private readonly PluginCatalogClient pluginCatalog = new PluginCatalogClient();
     private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     private HttpListener listener;
@@ -373,6 +440,7 @@ namespace RacinageFreeDesktop {
     internal LocalServer(LocalStore store) {
       this.store = store;
       ai = new PortableAiService(store);
+      connected = new ConnectedMessaging(store);
     }
 
     internal void Start() {
@@ -383,6 +451,7 @@ namespace RacinageFreeDesktop {
       listener.Start();
       File.WriteAllText(Path.Combine(PortablePaths.UpdatesDir, "local-port.txt"), port.ToString(CultureInfo.InvariantCulture), Encoding.UTF8);
       running = true;
+      connected.Start();
       thread = new Thread(ListenLoop);
       thread.IsBackground = true;
       thread.Start();
@@ -390,6 +459,7 @@ namespace RacinageFreeDesktop {
 
     internal void Stop() {
       running = false;
+      connected.Stop();
       try { if (listener != null) listener.Stop(); } catch { }
       try { if (listener != null) listener.Close(); } catch { }
     }
@@ -430,6 +500,21 @@ namespace RacinageFreeDesktop {
         if (path == "/login") { Login(context); return; }
         if (path == "/start-free") { StartFree(context); return; }
         if (path == "/family") { Family(context); return; }
+        if (path == "/messages") {
+          if (!IsAuthenticated(context)) { Redirect(context, "/login"); return; }
+          WriteHtml(context, Page(
+            "Messages",
+            connected.Render(context.Request.QueryString["conversation"])));
+          return;
+        }
+        if (path == "/connected-messaging-api") {
+          ConnectedMessagingApi(context);
+          return;
+        }
+        if (path == "/connected-messaging-upload") {
+          ConnectedMessagingUpload(context);
+          return;
+        }
         if (path == "/manage" || path == "/manage/plugins" || path == "/manage/family" || path == "/manage/settings" || path == "/manage/ai") { Manage(context, path); return; }
         if (path == "/local-ai-api") { LocalAiApi(context); return; }
         if (path.StartsWith("/local-plugin-api/", StringComparison.OrdinalIgnoreCase)) { LocalPluginApi(context, path.Substring(18)); return; }
@@ -637,6 +722,89 @@ namespace RacinageFreeDesktop {
       WriteHtml(context, ManagePage(path, message));
     }
 
+    private void ConnectedMessagingApi(HttpListenerContext context) {
+      if (
+        !IsAuthenticated(context)
+        || context.Request.HttpMethod != "POST"
+        || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])
+      ) {
+        WriteJson(
+          context,
+          json.Serialize(new Dictionary<string, object> {
+            { "ok", false },
+            { "message", "The local connected-account session is unavailable." }
+          }),
+          403);
+        return;
+      }
+      if (context.Request.ContentLength64 < 1 || context.Request.ContentLength64 > 262144) {
+        WriteJson(
+          context,
+          json.Serialize(new Dictionary<string, object> {
+            { "ok", false },
+            { "message", "The local connected-account request is too large." }
+          }),
+          413);
+        return;
+      }
+      try {
+        string body;
+        using (StreamReader reader = new StreamReader(
+          context.Request.InputStream,
+          Encoding.UTF8)) {
+          body = reader.ReadToEnd();
+        }
+        Dictionary<string, object> request =
+          json.Deserialize<Dictionary<string, object> >(body)
+          ?? new Dictionary<string, object>();
+        WriteJson(context, json.Serialize(connected.Action(request)));
+      } catch (Exception error) {
+        Program.Log("Connected messaging local action failed: " + error.Message);
+        WriteJson(
+          context,
+          json.Serialize(new Dictionary<string, object> {
+            { "ok", false },
+            { "message", error.Message }
+          }),
+          422);
+      }
+    }
+
+    private void ConnectedMessagingUpload(HttpListenerContext context) {
+      if (
+        !IsAuthenticated(context)
+        || context.Request.HttpMethod != "POST"
+        || !store.CheckCsrf(context.Request.Headers["X-Racinage-CSRF"])
+      ) {
+        WriteJson(
+          context,
+          json.Serialize(new Dictionary<string, object> {
+            { "ok", false },
+            { "message", "The local upload session is unavailable." }
+          }),
+          403);
+        return;
+      }
+      try {
+        Dictionary<string, object> result = connected.QueueFile(
+          context.Request.InputStream,
+          context.Request.ContentLength64,
+          context.Request.QueryString["conversation_id"] ?? "",
+          context.Request.Headers["X-File-Name"] ?? "",
+          context.Request.ContentType ?? "application/octet-stream");
+        WriteJson(context, json.Serialize(result), 201);
+      } catch (Exception error) {
+        Program.Log("Connected messaging local file queue failed: " + error.Message);
+        WriteJson(
+          context,
+          json.Serialize(new Dictionary<string, object> {
+            { "ok", false },
+            { "message", error.Message }
+          }),
+          422);
+      }
+    }
+
     private string ManagePage(string path, string message) {
       string active = path.EndsWith("/plugins", StringComparison.OrdinalIgnoreCase) ? "plugins" : (path.EndsWith("/settings", StringComparison.OrdinalIgnoreCase) ? "settings" : (path.EndsWith("/family", StringComparison.OrdinalIgnoreCase) ? "family" : (path.EndsWith("/ai", StringComparison.OrdinalIgnoreCase) ? "ai" : "account")));
       string tabs = "<nav class='manage-tabs' aria-label='Manage sections'>" + ManageTab("/manage", "Account", active == "account") + ManageTab("/manage/family", "Family", active == "family") + ManageTab("/manage/plugins", "Plugins", active == "plugins") + ManageTab("/manage/ai", "AI Features", active == "ai") + ManageTab("/manage/settings", "Settings", active == "settings") + "</nav>";
@@ -650,7 +818,8 @@ namespace RacinageFreeDesktop {
         List<Dictionary<string,string> > rates=store.GetCurrencyRates();string selected=store.GetDisplayCurrency();StringBuilder options=new StringBuilder(),lines=new StringBuilder();foreach(Dictionary<string,string> rate in rates){options.Append("<option value='"+A(rate["code"])+"'"+(rate["code"]==selected?" selected":"")+">"+H(rate["code"]+" - "+rate["name"])+"</option>");lines.Append(rate["code"]+" | "+rate["name"]+" | "+rate["rate"]+"\r\n");}
         content = "<section class='manage-grid'><article class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></article><article class='manage-card'><h2>Currency localisation</h2><p>Finance Manager uses this account display currency. Rates are entered as the amount of each currency equal to 1 USD.</p><form method='post' action='/manage/settings'>"+CsrfInput()+"<input type='hidden' name='action' value='save_currency_settings'><label>Display currency<select name='display_currency'>"+options+"</select></label><label>Offline currency rates<textarea name='currency_rates' rows='8' spellcheck='false'>"+H(lines.ToString())+"</textarea></label><small>One per line: CODE | Name | rate. USD must remain 1.</small><button class='button' type='submit'>Save currency settings</button></form></article></section>";
       } else {
-        content = "<section class='manage-grid'><article class='manage-card'><h2>Local account</h2><p>One local user owns this device's family records. Collaborative members and invitations are intentionally unavailable.</p><a class='button ghost' href='/family'>Open dashboard</a></article><article class='manage-card'><h2>Plan</h2><p>Lite Free limits apply to local features. Reviewed plugins can add Free features, while optional Pro features are purchased through the publisher's hosted Racinage page.</p><a class='button' href='" + PortablePaths.PricingUrl + "'>View Racinage plans</a></article></section>";
+        Dictionary<string, object> connectedStatus = connected.Status();
+        content = "<section class='manage-grid'><article class='manage-card'><h2>Local account</h2><p>One local user owns this device's family records. Collaborative members and invitations are intentionally unavailable.</p><a class='button ghost' href='/family'>Open dashboard</a></article><article class='manage-card'><h2>Connected messaging</h2><p>State: " + H(Convert.ToString(connectedStatus["state"], CultureInfo.InvariantCulture).Replace('_', ' ')) + ". Hosted password and two-factor authentication are handled only on racinage.com.</p><a class='button ghost' href='/messages'>Open Messages</a></article><article class='manage-card'><h2>Plan</h2><p>Lite Free limits apply to local features. Reviewed plugins can add Free features, while optional Pro features are purchased through the publisher's hosted Racinage page.</p><a class='button' href='" + PortablePaths.PricingUrl + "'>View Racinage plans</a></article></section>";
       }
       string body = "<section class='manage-head'><div><p class='kicker'>Manage</p><h1>Account and features</h1><p>Manage the local account using the same clear sections as the hosted app, without collaborative controls.</p></div></section>" + tabs + ErrorHtml(message) + "<div class='manage-content'>" + content + "</div>" + PortableAiShell(active);
       return Page("Manage", body);
@@ -853,8 +1022,8 @@ namespace RacinageFreeDesktop {
     private string Page(string title, string body) {
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
         "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css'><style>" + Css() + "</style></head><body>" +
-        "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
-        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + "</script><script src='/assets/ai-assistant.js'></script></body></html>";
+        "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
+        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js'></script></body></html>";
     }
 
     private static string ErrorHtml(string error) {
@@ -870,7 +1039,7 @@ namespace RacinageFreeDesktop {
 @font-face{font-family:Inter;src:url('/fonts/inter/InterVariable.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
 @font-face{font-family:Inter;src:url('/fonts/inter/InterVariable-Italic.woff2') format('woff2');font-weight:100 900;font-style:italic;font-display:swap}
 :root{--brand:#004650;--accent:#c35900;--pale:#f5fafd;--line:#dbe5ea;--text:#3d4b4c;--muted:#6d7c7d}
-*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Tahoma,sans-serif;background:#f8fbfc;color:var(--text)}a{color:#007584;text-decoration:none}header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:5}.brand{font-weight:800;color:var(--brand)}nav{display:flex;gap:16px;align-items:center}nav a{font-size:14px;font-weight:600;color:var(--muted)}main{max-width:1120px;margin:0 auto;padding:34px 24px 70px}.hero{min-height:360px;display:grid;align-items:center;border-bottom:1px solid var(--line)}.hero h1,.dashhead h1,.manage-head h1{font-size:48px;line-height:1.02;margin:6px 0 16px;color:var(--brand)}.hero p,.dashhead p,.manage-head p,.note{font-size:17px;line-height:1.6;max-width:760px;color:var(--muted)}.kicker{font-size:12px!important;text-transform:uppercase;letter-spacing:.14em;color:var(--accent)!important;font-weight:800;margin:0}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px}.actions form{display:block}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--brand);background:var(--brand);color:#fff;font:700 14px/1 inherit;cursor:pointer}.button.ghost{background:transparent;color:var(--brand);border-color:#9ab2b8}.grid,.manage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:28px}.grid article,.panel,.manage-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}.grid h2,.panel h2,.manage-card h2{margin:0 0 10px;color:var(--brand)}.grid p,.panel p,.manage-card p{line-height:1.55;color:var(--muted)}.narrow{max-width:460px;margin:30px auto}.wide{margin-top:18px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dashhead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}form{display:grid;gap:12px}label{display:grid;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}input,textarea{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfdfd;color:var(--text)}textarea{resize:vertical}.error{border:1px solid #efb5b5;background:#fff2f2;color:#9b2525;border-radius:8px;padding:10px 12px}.sharebar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}.share{border:1px solid #cddbe0;background:#f4faff;border-radius:8px;padding:8px 11px;cursor:pointer;font-weight:700;color:var(--brand)}.people{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.people article{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfdfd}.people strong{display:block;color:var(--brand)}.people span{display:block;color:var(--accent);font-size:12px;font-weight:800;text-transform:uppercase;margin-top:3px}.people p{margin:8px 0 0;font-size:14px}.textbtn{border:0;background:transparent;color:#b93333;padding:8px 0 0;cursor:pointer;font-weight:700}.empty{margin:0}.modal{position:fixed;inset:0;background:rgba(5,21,25,.55);display:grid;place-items:center;padding:24px;z-index:20}.modal[hidden]{display:none}.modalbox{width:min(440px,100%);background:#fff;border-radius:12px;padding:24px;border:1px solid var(--line)}.modalbox h2{margin:0 0 10px;color:var(--brand)}.panelhead,.manage-card-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.panelhead h2,.panelhead p,.manage-card-head h2,.manage-card-head p{margin:0}.manage-head{margin-bottom:22px}.manage-tabs{display:flex;gap:6px;overflow:auto;padding:5px;border:1px solid var(--line);border-radius:10px;background:#fff}.manage-tabs a{min-height:42px;display:inline-flex;align-items:center;padding:0 16px;border-radius:7px;font-weight:700;color:var(--muted)}.manage-tabs a.active{color:#fff;background:var(--brand)}.manage-content{margin-top:18px}.manage-grid{margin-top:0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:18px 0 0}.facts div{padding:12px;border:1px solid var(--line);border-radius:9px}.facts dt{font-size:12px;color:var(--muted)}.facts dd{margin:5px 0 0;color:var(--brand);font-weight:700}.plugin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:18px}.plugin-card{display:flex;flex-direction:column;min-height:260px;padding:16px;border:1px solid var(--line);border-radius:10px;background:#fbfdfd}.plugin-card-top{display:flex;gap:11px;align-items:center}.plugin-card h3{margin:0;color:var(--brand)}.plugin-card>p{flex:1}.plugin-mark{width:44px;height:44px;display:grid;place-items:center;border-radius:9px;color:#fff;background:var(--brand);font-size:20px;font-weight:800}.plugin-meta{margin:4px 0 0!important;font-size:12px}.notice{padding:10px;border-left:3px solid var(--accent);background:#fff8ef;font-size:13px}.status-pill{padding:7px 10px;border-radius:999px;color:var(--brand);background:#e9f3ef;font-size:12px;font-weight:800}.plugin-frame{width:100%;min-height:620px;border:1px solid var(--line);border-radius:12px;background:#fff}@media(max-width:760px){header{padding:0 16px}nav{gap:10px}.hero h1,.dashhead h1,.manage-head h1{font-size:36px}.layout{grid-template-columns:1fr}.dashhead,.manage-card-head{display:block}.manage-card-head .button,.manage-card-head .status-pill{margin-top:12px}}";
+*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Tahoma,sans-serif;background:#f8fbfc;color:var(--text)}a{color:#007584;text-decoration:none}header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:5}.brand{font-weight:800;color:var(--brand)}nav{display:flex;gap:16px;align-items:center}nav a{font-size:14px;font-weight:600;color:var(--muted)}main{max-width:1120px;margin:0 auto;padding:34px 24px 70px}.hero{min-height:360px;display:grid;align-items:center;border-bottom:1px solid var(--line)}.hero h1,.dashhead h1,.manage-head h1{font-size:48px;line-height:1.02;margin:6px 0 16px;color:var(--brand)}.hero p,.dashhead p,.manage-head p,.note{font-size:17px;line-height:1.6;max-width:760px;color:var(--muted)}.kicker{font-size:12px!important;text-transform:uppercase;letter-spacing:.14em;color:var(--accent)!important;font-weight:800;margin:0}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px}.actions form{display:block}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--brand);background:var(--brand);color:#fff;font:700 14px/1 inherit;cursor:pointer}.button.ghost{background:transparent;color:var(--brand);border-color:#9ab2b8}.grid,.manage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:28px}.grid article,.panel,.manage-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}.grid h2,.panel h2,.manage-card h2{margin:0 0 10px;color:var(--brand)}.grid p,.panel p,.manage-card p{line-height:1.55;color:var(--muted)}.narrow{max-width:460px;margin:30px auto}.wide{margin-top:18px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dashhead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}form{display:grid;gap:12px}label{display:grid;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}input,textarea{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfdfd;color:var(--text)}textarea{resize:vertical}.error{border:1px solid #efb5b5;background:#fff2f2;color:#9b2525;border-radius:8px;padding:10px 12px}.sharebar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}.share{border:1px solid #cddbe0;background:#f4faff;border-radius:8px;padding:8px 11px;cursor:pointer;font-weight:700;color:var(--brand)}.people{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.people article{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfdfd}.people strong{display:block;color:var(--brand)}.people span{display:block;color:var(--accent);font-size:12px;font-weight:800;text-transform:uppercase;margin-top:3px}.people p{margin:8px 0 0;font-size:14px}.textbtn{border:0;background:transparent;color:#b93333;padding:8px 0 0;cursor:pointer;font-weight:700}.empty{margin:0}.modal{position:fixed;inset:0;background:rgba(5,21,25,.55);display:grid;place-items:center;padding:24px;z-index:20}.modal[hidden]{display:none}.modalbox{width:min(440px,100%);background:#fff;border-radius:12px;padding:24px;border:1px solid var(--line)}.modalbox h2{margin:0 0 10px;color:var(--brand)}.panelhead,.manage-card-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.panelhead h2,.panelhead p,.manage-card-head h2,.manage-card-head p{margin:0}.manage-head{margin-bottom:22px}.manage-tabs{display:flex;gap:6px;overflow:auto;padding:5px;border:1px solid var(--line);border-radius:10px;background:#fff}.manage-tabs a{min-height:42px;display:inline-flex;align-items:center;padding:0 16px;border-radius:7px;font-weight:700;color:var(--muted)}.manage-tabs a.active{color:#fff;background:var(--brand)}.manage-content{margin-top:18px}.manage-grid{margin-top:0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:18px 0 0}.facts div{padding:12px;border:1px solid var(--line);border-radius:9px}.facts dt{font-size:12px;color:var(--muted)}.facts dd{margin:5px 0 0;color:var(--brand);font-weight:700}.plugin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:18px}.plugin-card{display:flex;flex-direction:column;min-height:260px;padding:16px;border:1px solid var(--line);border-radius:10px;background:#fbfdfd}.plugin-card-top{display:flex;gap:11px;align-items:center}.plugin-card h3{margin:0;color:var(--brand)}.plugin-card>p{flex:1}.plugin-mark{width:44px;height:44px;display:grid;place-items:center;border-radius:9px;color:#fff;background:var(--brand);font-size:20px;font-weight:800}.plugin-meta{margin:4px 0 0!important;font-size:12px}.notice{padding:10px;border-left:3px solid var(--accent);background:#fff8ef;font-size:13px}.status-pill{padding:7px 10px;border-radius:999px;color:var(--brand);background:#e9f3ef;font-size:12px;font-weight:800}.plugin-frame{width:100%;min-height:620px;border:1px solid var(--line);border-radius:12px;background:#fff}.connected-status{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:16px}.connected-status h2,.connected-status p{margin:0}.connected-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px}.connected-layout aside{display:grid;align-content:start;gap:6px;padding:10px}.connected-conversation{display:grid;gap:3px;padding:12px;border:1px solid transparent;border-radius:8px;color:var(--brand)}.connected-conversation span{font-size:12px;color:var(--muted)}.connected-conversation.active{border-color:var(--line);background:var(--pale)}.connected-thread{display:grid;gap:18px}.connected-thread>div{display:grid;gap:8px;max-height:520px;overflow:auto}.connected-message{padding:12px;border:1px solid var(--line);border-radius:9px;background:#fbfdfd}.connected-message>div{display:flex;justify-content:space-between;gap:12px}.connected-message time{font-size:12px;color:var(--muted)}.connected-message p{margin:8px 0 0;white-space:normal}.connected-attachments{margin:8px 0 0;padding-left:20px;font-size:12px;color:var(--muted)}.connected-composer{padding-top:16px;border-top:1px solid var(--line)}@media(max-width:760px){header{padding:0 16px}nav{gap:10px}.hero h1,.dashhead h1,.manage-head h1{font-size:36px}.layout,.connected-layout{grid-template-columns:1fr}.dashhead,.manage-card-head,.connected-status{display:block}.manage-card-head .button,.manage-card-head .status-pill,.connected-status .actions{margin-top:12px}}";
     }
 
     private string Js() {

@@ -2,11 +2,13 @@
 
 Racinage Free is the open-source Windows portable edition of Racinage for the Lite Free plan. It runs locally on one Windows device and stores family data under `%LOCALAPPDATA%\Racinage Free`. The optional Plugins tab connects only to the signed public Racinage plugin catalog and hosted purchase pages; it does not connect the local family database to the hosted Racinage database.
 
-The source tree is now `v0.16.0` and includes an optional local AI assistant for Ollama, LM Studio, and custom OpenAI-compatible loopback servers. The latest published, signed executable remains `v0.15.0` until the trusted Windows signing release gate is configured.
+The source tree is now `v0.17.0`. It includes an optional local AI assistant for Ollama, LM Studio, and custom OpenAI-compatible loopback servers, plus opt-in connected messaging for a hosted Racinage account. The latest published, signed executable remains `v0.15.0` until the trusted Windows signing release gate is configured.
 
 ![Finance Manager running fully offline in Racinage Free](docs/images/racinage-free-finance-manager.png)
 
 ![NameGen helping parents discover names offline](docs/images/racinage-free-namegen.png)
+
+![Connected hosted messaging with an encrypted local cache and offline outbox](docs/images/racinage-free-connected-messages.jpg)
 
 ## Download
 
@@ -16,9 +18,11 @@ The source tree is now `v0.16.0` and includes an optional local AI assistant for
 
 ## What Is Included
 
-- Native C# WinForms/WebView2 host.
+- Borderless native C# WinForms/WebView2 host with one custom app bar.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- Optional hosted messaging connection through browser-based device authorization. Password and two-factor authentication are entered only on `racinage.com`.
+- Windows DPAPI-protected hosted tokens, an encrypted local message cache, an encrypted ordered offline outbox, resumable file uploads, event-stream recovery, and explicit reconnect conflict reporting.
 - First-class Ollama, LM Studio, and custom local OpenAI-compatible setup, model discovery, capability testing, streaming chat, and typed local change previews.
 - Strict loopback-only AI endpoints with no cloud fallback. Optional local provider tokens are protected for the current Windows user with DPAPI.
 - Preinstalled Finance Manager with offline workspaces, accounts, transactions, budgets, goals, debts, investments, forecasts, reports, circles, imports, exports, and private attachments.
@@ -51,10 +55,10 @@ powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racina
 Output:
 
 ```text
-desktop\RacinageFree\dist\development\RacinageFree-v0.16.0-dev.exe
+desktop\RacinageFree\dist\development\RacinageFree-v0.17.0-dev.exe
 ```
 
-Development builds are intentionally unsigned and are not release artifacts. Public `v0.16.0` builds require the protected `RACINAGE_WINDOWS_SIGNTOOL` plus a signing certificate path or thumbprint; the build verifies signatures on both the native host and bootstrapper.
+Development builds are intentionally unsigned and are not release artifacts. Public `v0.17.0` builds require the protected `RACINAGE_WINDOWS_SIGNTOOL` plus a signing certificate path or thumbprint; the build verifies signatures on both the native host and bootstrapper.
 
 ## Local Data
 
@@ -68,9 +72,10 @@ Racinage Free keeps mutable data outside the executable:
 %LOCALAPPDATA%\Racinage Free\plugins
 %LOCALAPPDATA%\Racinage Free\plugin-cache
 %LOCALAPPDATA%\Racinage Free\ai
+%LOCALAPPDATA%\Racinage Free\connected
 ```
 
-Refreshing or rebuilding the same version preserves local data. Portable AI never synchronizes or exposes the local SQLite database to hosted Racinage.
+Refreshing or rebuilding the same version preserves local data. Portable AI never synchronizes or exposes the local SQLite database to hosted Racinage. Connected messaging synchronizes only the hosted conversations and files authorized for the connected account; it never uploads the local family database.
 
 ## Repository
 

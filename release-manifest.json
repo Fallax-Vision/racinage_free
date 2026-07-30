@@ -1,7 +1,13 @@
 {
   "name": "Racinage Free",
-  "source_version": "0.16.0",
+  "source_version": "0.17.0",
   "source_release_status": "blocked_until_trusted_windows_signing_is_configured",
+  "development_artifact": {
+    "status": "unpublished_unsigned",
+    "path": "desktop/RacinageFree/dist/development/RacinageFree-v0.17.0-dev.exe",
+    "sha256": "8070e08f6b90b85abb860b828b1b2d2e9579ba89f027d871fe97c69b47d08a01",
+    "bytes": 2494976
+  },
   "version": "0.15.0",
   "tag": "racinage-free-v0.15.0",
   "artifact": "releases/desktop/racinage-free-v0.15.0/RacinageFree-v0.15.0.exe",

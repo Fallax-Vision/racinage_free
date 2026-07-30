@@ -143,7 +143,7 @@ namespace RacinageFreeDesktop {
         { "plugins", store.GetInstalledPlugins().Select(row => new Dictionary<string, string> {
           { "slug", row["slug"] }, { "name", row["name"] }, { "status", row["status"] }
         }).ToList() },
-        { "edition", "Racinage Free 0.16.0" },
+        { "edition", "Racinage Free 0.17.0" },
         { "limitations", "Portable Free has local family, people, settings, and reviewed portable plugins. It has no hosted Gallery, Events, Projects, or Trees modules." }
       };
     }
