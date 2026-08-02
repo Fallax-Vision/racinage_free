@@ -1020,10 +1020,11 @@ namespace RacinageFreeDesktop {
     }
 
     private string Page(string title, string body) {
+      string assetVersion = Uri.EscapeDataString(PortablePaths.Version);
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css'><style>" + Css() + "</style></head><body>" +
+        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css?v=" + assetVersion + "'><style>" + Css() + "</style></head><body>" +
         "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
-        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js'></script></body></html>";
+        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js?v=" + assetVersion + "'></script></body></html>";
     }
 
     private static string ErrorHtml(string error) {
@@ -1036,8 +1037,8 @@ namespace RacinageFreeDesktop {
 
     private static string Css() {
       return @"
-@font-face{font-family:Inter;src:url('/fonts/inter/InterVariable.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
-@font-face{font-family:Inter;src:url('/fonts/inter/InterVariable-Italic.woff2') format('woff2');font-weight:100 900;font-style:italic;font-display:swap}
+@font-face{font-family:Inter;src:url('/fonts/inter/InterVariable.woff2?v=" + Uri.EscapeDataString(PortablePaths.Version) + @"') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
+@font-face{font-family:Inter;src:url('/fonts/inter/InterVariable-Italic.woff2?v=" + Uri.EscapeDataString(PortablePaths.Version) + @"') format('woff2');font-weight:100 900;font-style:italic;font-display:swap}
 :root{--brand:#004650;--accent:#c35900;--pale:#f5fafd;--line:#dbe5ea;--text:#3d4b4c;--muted:#6d7c7d}
 *{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Tahoma,sans-serif;background:#f8fbfc;color:var(--text)}a{color:#007584;text-decoration:none}header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:5}.brand{font-weight:800;color:var(--brand)}nav{display:flex;gap:16px;align-items:center}nav a{font-size:14px;font-weight:600;color:var(--muted)}main{max-width:1120px;margin:0 auto;padding:34px 24px 70px}.hero{min-height:360px;display:grid;align-items:center;border-bottom:1px solid var(--line)}.hero h1,.dashhead h1,.manage-head h1{font-size:48px;line-height:1.02;margin:6px 0 16px;color:var(--brand)}.hero p,.dashhead p,.manage-head p,.note{font-size:17px;line-height:1.6;max-width:760px;color:var(--muted)}.kicker{font-size:12px!important;text-transform:uppercase;letter-spacing:.14em;color:var(--accent)!important;font-weight:800;margin:0}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px}.actions form{display:block}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--brand);background:var(--brand);color:#fff;font:700 14px/1 inherit;cursor:pointer}.button.ghost{background:transparent;color:var(--brand);border-color:#9ab2b8}.grid,.manage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:28px}.grid article,.panel,.manage-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}.grid h2,.panel h2,.manage-card h2{margin:0 0 10px;color:var(--brand)}.grid p,.panel p,.manage-card p{line-height:1.55;color:var(--muted)}.narrow{max-width:460px;margin:30px auto}.wide{margin-top:18px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dashhead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}form{display:grid;gap:12px}label{display:grid;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}input,textarea{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfdfd;color:var(--text)}textarea{resize:vertical}.error{border:1px solid #efb5b5;background:#fff2f2;color:#9b2525;border-radius:8px;padding:10px 12px}.sharebar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}.share{border:1px solid #cddbe0;background:#f4faff;border-radius:8px;padding:8px 11px;cursor:pointer;font-weight:700;color:var(--brand)}.people{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.people article{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfdfd}.people strong{display:block;color:var(--brand)}.people span{display:block;color:var(--accent);font-size:12px;font-weight:800;text-transform:uppercase;margin-top:3px}.people p{margin:8px 0 0;font-size:14px}.textbtn{border:0;background:transparent;color:#b93333;padding:8px 0 0;cursor:pointer;font-weight:700}.empty{margin:0}.modal{position:fixed;inset:0;background:rgba(5,21,25,.55);display:grid;place-items:center;padding:24px;z-index:20}.modal[hidden]{display:none}.modalbox{width:min(440px,100%);background:#fff;border-radius:12px;padding:24px;border:1px solid var(--line)}.modalbox h2{margin:0 0 10px;color:var(--brand)}.panelhead,.manage-card-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.panelhead h2,.panelhead p,.manage-card-head h2,.manage-card-head p{margin:0}.manage-head{margin-bottom:22px}.manage-tabs{display:flex;gap:6px;overflow:auto;padding:5px;border:1px solid var(--line);border-radius:10px;background:#fff}.manage-tabs a{min-height:42px;display:inline-flex;align-items:center;padding:0 16px;border-radius:7px;font-weight:700;color:var(--muted)}.manage-tabs a.active{color:#fff;background:var(--brand)}.manage-content{margin-top:18px}.manage-grid{margin-top:0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:18px 0 0}.facts div{padding:12px;border:1px solid var(--line);border-radius:9px}.facts dt{font-size:12px;color:var(--muted)}.facts dd{margin:5px 0 0;color:var(--brand);font-weight:700}.plugin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:18px}.plugin-card{display:flex;flex-direction:column;min-height:260px;padding:16px;border:1px solid var(--line);border-radius:10px;background:#fbfdfd}.plugin-card-top{display:flex;gap:11px;align-items:center}.plugin-card h3{margin:0;color:var(--brand)}.plugin-card>p{flex:1}.plugin-mark{width:44px;height:44px;display:grid;place-items:center;border-radius:9px;color:#fff;background:var(--brand);font-size:20px;font-weight:800}.plugin-meta{margin:4px 0 0!important;font-size:12px}.notice{padding:10px;border-left:3px solid var(--accent);background:#fff8ef;font-size:13px}.status-pill{padding:7px 10px;border-radius:999px;color:var(--brand);background:#e9f3ef;font-size:12px;font-weight:800}.plugin-frame{width:100%;min-height:620px;border:1px solid var(--line);border-radius:12px;background:#fff}.connected-status{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:16px}.connected-status h2,.connected-status p{margin:0}.connected-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px}.connected-layout aside{display:grid;align-content:start;gap:6px;padding:10px}.connected-conversation{display:grid;gap:3px;padding:12px;border:1px solid transparent;border-radius:8px;color:var(--brand)}.connected-conversation span{font-size:12px;color:var(--muted)}.connected-conversation.active{border-color:var(--line);background:var(--pale)}.connected-thread{display:grid;gap:18px}.connected-thread>div{display:grid;gap:8px;max-height:520px;overflow:auto}.connected-message{padding:12px;border:1px solid var(--line);border-radius:9px;background:#fbfdfd}.connected-message>div{display:flex;justify-content:space-between;gap:12px}.connected-message time{font-size:12px;color:var(--muted)}.connected-message p{margin:8px 0 0;white-space:normal}.connected-attachments{margin:8px 0 0;padding-left:20px;font-size:12px;color:var(--muted)}.connected-composer{padding-top:16px;border-top:1px solid var(--line)}@media(max-width:760px){header{padding:0 16px}nav{gap:10px}.hero h1,.dashhead h1,.manage-head h1{font-size:36px}.layout,.connected-layout{grid-template-columns:1fr}.dashhead,.manage-card-head,.connected-status{display:block}.manage-card-head .button,.manage-card-head .status-pill,.connected-status .actions{margin-top:12px}}";
     }
@@ -1059,6 +1060,8 @@ namespace RacinageFreeDesktop {
       byte[] bytes = Encoding.UTF8.GetBytes(html);
       context.Response.StatusCode = status;
       context.Response.ContentType = "text/html; charset=utf-8";
+      context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+      context.Response.Headers["Pragma"] = "no-cache";
       context.Response.ContentLength64 = bytes.Length;
       context.Response.OutputStream.Write(bytes, 0, bytes.Length);
       context.Response.Close();
@@ -1068,8 +1071,21 @@ namespace RacinageFreeDesktop {
       string root = AppDomain.CurrentDomain.BaseDirectory;
       string path = Path.GetFullPath(Path.Combine(root, relativePath));
       if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path)) { context.Response.StatusCode = 404; context.Response.Close(); return; }
-      byte[] bytes = File.ReadAllBytes(path);
+      FileInfo file = new FileInfo(path);
+      string etag = "\"" + file.LastWriteTimeUtc.Ticks.ToString("x", CultureInfo.InvariantCulture) + "-" + file.Length.ToString("x", CultureInfo.InvariantCulture) + "\"";
+      bool immutable = String.Equals(context.Request.QueryString["v"], PortablePaths.Version, StringComparison.Ordinal);
       context.Response.ContentType = contentType;
+      context.Response.Headers["Cache-Control"] = immutable
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=0, must-revalidate";
+      context.Response.Headers["ETag"] = etag;
+      context.Response.Headers["Last-Modified"] = file.LastWriteTimeUtc.ToString("R", CultureInfo.InvariantCulture);
+      if (String.Equals(context.Request.Headers["If-None-Match"], etag, StringComparison.Ordinal)) {
+        context.Response.StatusCode = 304;
+        context.Response.Close();
+        return;
+      }
+      byte[] bytes = File.ReadAllBytes(path);
       context.Response.ContentLength64 = bytes.Length;
       context.Response.OutputStream.Write(bytes, 0, bytes.Length);
       context.Response.Close();
@@ -1083,6 +1099,8 @@ namespace RacinageFreeDesktop {
       byte[] bytes = Encoding.UTF8.GetBytes(json);
       context.Response.StatusCode = status;
       context.Response.ContentType = "application/json; charset=utf-8";
+      context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+      context.Response.Headers["Pragma"] = "no-cache";
       context.Response.ContentLength64 = bytes.Length;
       context.Response.OutputStream.Write(bytes, 0, bytes.Length);
       context.Response.Close();
@@ -1091,6 +1109,7 @@ namespace RacinageFreeDesktop {
     private static void Redirect(HttpListenerContext context, string target) {
       context.Response.StatusCode = 302;
       context.Response.RedirectLocation = target;
+      context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
       context.Response.Close();
     }
 
@@ -1832,6 +1851,11 @@ namespace RacinageFreeDesktop {
       Directory.CreateDirectory(Path.GetDirectoryName(path));
       int rc = sqlite3_open_v2(ToUtf8(path), out db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, IntPtr.Zero);
       if (rc != SQLITE_OK) throw new InvalidOperationException("Could not open local SQLite database.");
+      Exec("PRAGMA busy_timeout=5000");
+      Exec("PRAGMA synchronous=NORMAL");
+      Exec("PRAGMA foreign_keys=ON");
+      Exec("PRAGMA temp_store=MEMORY");
+      Exec("PRAGMA cache_size=-16384");
     }
 
     internal void Exec(string sql) {
