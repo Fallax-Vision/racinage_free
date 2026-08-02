@@ -18,6 +18,17 @@
   let balancesHidden = localStorage.getItem("financeBalancesHidden") === "1";
   let activeEditor = null;
   let importRows = [];
+  const workspaceGroups = {
+    overview: ["overview"],
+    transactions: ["transactions", "recurring", "taxonomy"],
+    planning: ["budgets", "goals", "forecast"],
+    assets: ["accounts", "debts", "investments"],
+    reports: ["reports"],
+    people: ["circles"],
+    settings: ["settings"]
+  };
+  const workspaceGroupLabels = { overview: "Overview", transactions: "Transactions", planning: "Planning", assets: "Assets & Debt", reports: "Reports", people: "People", settings: "Settings" };
+  const panelLabels = { transactions: "Activity", recurring: "Recurring & subscriptions", taxonomy: "Categories & tags", budgets: "Budgets", goals: "Goals", forecast: "Forecast", accounts: "Accounts", debts: "Debts", investments: "Investments", circles: "Circles" };
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const id = prefix => `${prefix}_${crypto.getRandomValues(new Uint32Array(4)).join("")}`;
@@ -26,6 +37,28 @@
     const parts = String(value || "").split("-");
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : "";
   };
+  const workspaceKind = row => ["personal", "family", "group"].includes(data(row).workspace_kind) ? data(row).workspace_kind : "personal";
+  const periodPreference = () => {
+    const fallback = { preset: "this_month", start: "", end: "" };
+    try { return { ...fallback, ...JSON.parse(localStorage.getItem(`financePeriod:${workspaceId}`) || "{}") }; } catch (_) { return fallback; }
+  };
+  const periodBounds = () => {
+    const preference = periodPreference(), now = new Date(), end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), start = new Date(end);
+    if (preference.preset === "last_month") { start.setUTCDate(1); start.setUTCMonth(start.getUTCMonth() - 1); end.setUTCDate(0); }
+    else if (["last_3_months", "last_6_months", "last_12_months"].includes(preference.preset)) { start.setUTCDate(1); start.setUTCMonth(start.getUTCMonth() - ({ last_3_months: 2, last_6_months: 5, last_12_months: 11 }[preference.preset])); }
+    else if (preference.preset === "this_year") { start.setUTCMonth(0, 1); }
+    else if (preference.preset === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(preference.start) && /^\d{4}-\d{2}-\d{2}$/.test(preference.end)) return { start: preference.start, end: preference.end, preference };
+    else start.setUTCDate(1);
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10), preference };
+  };
+  const periodControl = () => {
+    const { preference, start, end } = periodBounds(), options = [
+      { value: "this_month", label: "This month" }, { value: "last_month", label: "Last month" }, { value: "last_3_months", label: "Last 3 months" },
+      { value: "last_6_months", label: "Last 6 months" }, { value: "last_12_months", label: "Last 12 months" }, { value: "this_year", label: "This year" }, { value: "custom", label: "Custom" }
+    ];
+    return `<div class="period-control"><label>Period<select data-period-preset>${optionHtml(options, preference.preset)}</select></label><label class="custom-period"${preference.preset === "custom" ? "" : " hidden"}>From<input type="date" data-period-start value="${esc(preference.start || start)}"></label><label class="custom-period"${preference.preset === "custom" ? "" : " hidden"}>To<input type="date" data-period-end value="${esc(preference.end || end)}"></label></div>`;
+  };
+  const inSelectedPeriod = row => { const value = String(data(row).transaction_date || ""), bounds = periodBounds(); return value >= bounds.start && value <= bounds.end; };
   const cents = value => Math.round(Number(value || 0) * 100);
   const amount = value => (Number(value || 0) / 100).toFixed(2);
   const byType = (type, workspace = workspaceId) => state.records.filter(row => row.record_type === type && row.status === "active" && (!workspace || row.workspace_long_id === workspace));
@@ -119,7 +152,16 @@
   };
 
   const field = (name, label, type = "text", extra = {}) => ({ name, label, type, ...extra });
+  const normalizeTagNames = value => [...new Map(String(value || "").split(",").map(name => name.trim()).filter(Boolean).slice(0, 30).map(name => [name.toLocaleLowerCase(), name.slice(0, 80)])).values()].join(", ");
+  const ensureTags = async value => {
+    for (const name of normalizeTagNames(value).split(",").map(item => item.trim()).filter(Boolean)) {
+      const existing = byType("tags").find(row => data(row).name.toLocaleLowerCase() === name.toLocaleLowerCase());
+      if (!existing) await save("tags", { name, normalized_name: name.toLocaleLowerCase(), archived: false });
+      else if (data(existing).archived) await save("tags", { ...data(existing), archived: false }, { long_id: existing.long_id });
+    }
+  };
   const accountOptions = () => byType("accounts").filter(row => !data(row).external).map(row => ({ value: row.long_id, label: `${data(row).name} (${data(row).native_currency_code})` }));
+  const categoryOptions = (blank = true) => byType("categories").filter(row => !data(row).archived).map(row => ({ value: row.long_id, label: `${data(row).name} - ${data(row).category_type}` }));
   const recordConfigs = {
     accounts: {
       title: "Account",
@@ -140,8 +182,8 @@
         field("transaction_date", "Date", "date", { required: true, value: today() }),
         field("payee", "Payee", "text", { maxlength: 190 }),
         field("state", "Status", "select", { options: ["pending", "cleared", "reconciled"] }),
+        field("category", "Category", "dynamic", { options: categoryOptions, blank: "Uncategorized" }),
         field("tags", "Tags", "text", { maxlength: 500 }),
-        field("splits", "Split categories", "text", { wide: true, placeholder: "Food:25.00, Transport:10.00" }),
         field("note", "Note", "textarea", { wide: true, maxlength: 2000 })
       ]
     },
@@ -149,12 +191,15 @@
       title: "Recurring rule",
       fields: [
         field("name", "Name", "text", { required: true }),
+        field("recurring_kind", "Kind", "select", { options: ["income", "bill", "subscription"] }),
         field("transaction_type", "Type", "select", { options: ["income", "expense"] }),
         field("account", "Account", "dynamic", { options: accountOptions }),
         field("value", "Amount", "money", { required: true, min: .01 }),
         field("frequency", "Frequency", "select", { options: ["weekly", "monthly", "quarterly", "yearly"] }),
         field("next_date", "Next date", "date", { required: true, value: today() }),
         field("payee", "Payee", "text"),
+        field("category", "Category", "dynamic", { options: categoryOptions, blank: "Uncategorized" }),
+        field("tags", "Tags", "text", { maxlength: 500 }),
         field("note", "Note", "textarea", { wide: true })
       ]
     },
@@ -166,7 +211,7 @@
         field("start_date", "Start date", "date", { required: true, value: today().slice(0, 8) + "01" }),
         field("value", "Planned amount", "money", { required: true, min: 0 }),
         field("native_currency_code", "Currency", "currency"),
-        field("category", "Category", "text", { placeholder: "All categories" }),
+        field("category", "Category", "dynamic", { options: categoryOptions, blank: "All categories" }),
         field("goal", "Linked goal", "dynamic", { options: () => byType("goals").map(row => ({ value: row.long_id, label: data(row).name })), blank: "None" }),
         field("rollover", "Rollover", "checkbox")
       ]
@@ -253,6 +298,18 @@
         field("entry_date", "Date", "date", { required: true, value: today() }),
         field("note", "Note", "textarea", { wide: true })
       ]
+    },
+    categories: {
+      title: "Category",
+      fields: [
+        field("name", "Name", "text", { required: true, maxlength: 120 }),
+        field("category_type", "Type", "select", { options: ["expense", "income", "transfer"] }),
+        field("parent", "Parent category", "dynamic", { options: categoryOptions, blank: "None" })
+      ]
+    },
+    tags: {
+      title: "Tag",
+      fields: [field("name", "Name", "text", { required: true, maxlength: 80 })]
     }
   };
 
@@ -280,19 +337,32 @@
     document.getElementById("dialogTitle").textContent = `${row ? "Edit" : "Add"} ${config.title.toLowerCase()}`;
     document.getElementById("dialogKicker").textContent = panel === "settings" ? "Finance Manager" : panel;
     fieldsMount.innerHTML = config.fields.map(spec => `<label class="${spec.wide ? "wide" : ""}">${spec.type === "checkbox" ? "" : `<span>${esc(spec.label)}</span>`}${inputHtml(spec, values[spec.name])}</label>`).join("");
+    if (recordType === "transactions" && !["transfer_in", "transfer_out"].includes(values.transaction_type)) {
+      fieldsMount.insertAdjacentHTML("beforeend", `<section class="split-editor wide" data-split-editor><header><div><strong>Split categories</strong><small>Use lines only when a transaction belongs to multiple categories.</small></div><button class="ghost" type="button" data-add-split>Add split</button></header><div data-split-lines>${(values.splits || []).map(split => splitLineHtml(split)).join("")}</div><p>Remaining <strong data-split-remaining>0.00</strong></p></section>`);
+      syncPortableSplits();
+    }
     activeEditor = { recordType, row };
     dialog.showModal();
   };
 
-  const editorValues = () => Object.fromEntries(new FormData(form).entries());
-  const parseSplits = (text, totalCents) => {
-    if (!String(text || "").trim()) return [];
-    const splits = String(text).split(",").map(part => {
-      const index = part.lastIndexOf(":");
-      return { category: part.slice(0, index).trim(), amount_cents: cents(part.slice(index + 1)) };
-    });
+  const splitLineHtml = (split = {}) => `<div class="split-line"><label><span>Category</span><select data-split-category>${optionHtml(categoryOptions(false), split.category || "")}</select></label><label><span>Amount</span><input type="number" min="0.01" step="0.01" data-split-amount value="${esc(split.amount_cents ? amount(split.amount_cents) : "")}"></label><label><span>Note</span><input maxlength="500" data-split-note value="${esc(split.note || "")}"></label><button class="danger" type="button" data-remove-split>Remove</button></div>`;
+  const syncPortableSplits = () => {
+    const editor = fieldsMount.querySelector("[data-split-editor]");
+    if (!editor) return;
+    const total = cents(form.elements.value?.value), allocated = [...editor.querySelectorAll("[data-split-amount]")].reduce((sum, input) => sum + cents(input.value), 0);
+    editor.querySelector("[data-split-remaining]").textContent = amount(Math.max(0, total - allocated));
+    const primary = form.elements.category?.closest("label");
+    if (primary) { primary.hidden = Boolean(editor.querySelector(".split-line")); form.elements.category.disabled = primary.hidden; }
+  };
+  const editorValues = () => {
+    const values = Object.fromEntries(new FormData(form).entries()), lines = [...fieldsMount.querySelectorAll(".split-line")];
+    values.splits = lines.map(line => ({ category: line.querySelector("[data-split-category]").value, amount_cents: cents(line.querySelector("[data-split-amount]").value), note: line.querySelector("[data-split-note]").value.trim() }));
+    return values;
+  };
+  const validateSplits = (splits, totalCents) => {
+    if (!splits.length) return [];
     if (splits.some(split => !split.category || split.amount_cents <= 0) || splits.reduce((sum, split) => sum + split.amount_cents, 0) !== totalCents) throw new Error("Split amounts must be positive and equal the transaction amount.");
-    return splits;
+    return splits.map(split => ({ ...split, category_name: data(find("categories", split.category)).name || "" }));
   };
   const normalizeRecord = (recordType, values, existing) => {
     if (recordType === "accounts") {
@@ -303,13 +373,16 @@
       const account = find("accounts", values.account);
       if (!account) throw new Error("Choose an account.");
       const snap = snapshot(cents(values.value), data(account).native_currency_code);
-      return { ...values, amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(account).native_currency_code, splits: parseSplits(values.splits, snap.native_cents) };
+      const splits = values.splits.length ? validateSplits(values.splits, snap.native_cents) : (values.category ? [{ category: values.category, category_name: data(find("categories", values.category)).name || "", amount_cents: snap.native_cents, note: "" }] : []);
+      return { ...values, tags: normalizeTagNames(values.tags), amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(account).native_currency_code, splits };
     }
     if (recordType === "recurring_rules") {
       const account = find("accounts", values.account);
       if (!account) throw new Error("Choose an account.");
       const snap = snapshot(cents(values.value), data(account).native_currency_code);
-      return { ...values, amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(account).native_currency_code };
+      const recurringKind = ["income", "bill", "subscription"].includes(values.recurring_kind) ? values.recurring_kind : (values.transaction_type === "income" ? "income" : "bill");
+      if ((values.transaction_type === "income") !== (recurringKind === "income")) throw new Error("Income rules must use the Income kind; expense rules must use Bill or Subscription.");
+      return { ...values, recurring_kind: recurringKind, tags: normalizeTagNames(values.tags), amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(account).native_currency_code };
     }
     if (recordType === "budgets") {
       const snap = snapshot(cents(values.value), values.native_currency_code);
@@ -347,6 +420,8 @@
       const snap = snapshot(cents(values.value), data(circle).native_currency_code);
       return { ...values, amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(circle).native_currency_code };
     }
+    if (recordType === "categories") return { ...values, archived: false };
+    if (recordType === "tags") return { ...values, normalized_name: String(values.name || "").trim().toLocaleLowerCase(), archived: false };
     return { ...existing, ...values };
   };
 
@@ -361,8 +436,11 @@
     document.getElementById("toggleBalances").textContent = balancesHidden ? "Show balances" : "Hide balances";
   };
   const workspaceTabs = () => {
-    const panels = ["overview", "accounts", "transactions", "budgets", "goals", "debts", "investments", "forecast", "reports", "settings"];
-    return `<label class="workspace-mobile-nav">Workspace section<select data-workspace-mobile>${optionHtml(panels, panel)}</select></label><nav class="workspace-tabs" aria-label="Finance workspace">${panels.map(item => `<button type="button" data-panel="${item}" class="${item === panel ? "active" : ""}">${esc(item.replace(/\b\w/g, char => char.toUpperCase()))}</button>`).join("")}</nav>`;
+    const workspace = find("workspaces", workspaceId), kind = workspaceKind(workspace), hasCircles = byType("circles").length > 0;
+    const groups = Object.entries(workspaceGroups).filter(([group]) => group !== "people" || kind !== "personal" || hasCircles);
+    const currentGroup = groups.find(([, children]) => children.includes(panel))?.[0] || "overview";
+    const children = workspaceGroups[currentGroup];
+    return `<label class="workspace-mobile-nav">Workspace section<select data-workspace-mobile>${optionHtml(groups.map(([value]) => ({ value: workspaceGroups[value][0], label: workspaceGroupLabels[value] })), workspaceGroups[currentGroup][0])}</select></label><nav class="workspace-tabs" aria-label="Finance workspace">${groups.map(([group, items]) => `<button type="button" data-panel="${items[0]}" class="${group === currentGroup ? "active" : ""}">${esc(workspaceGroupLabels[group])}</button>`).join("")}</nav>${children.length > 1 ? `<nav class="workspace-subtabs" aria-label="${esc(workspaceGroupLabels[currentGroup])}">${children.map(item => `<button type="button" data-panel="${item}" class="${item === panel ? "active" : ""}">${esc(panelLabels[item] || item)}</button>`).join("")}</nav>` : ""}`;
   };
 
   const renderHome = () => {
@@ -372,46 +450,53 @@
     const recent = state.records.filter(row => row.record_type === "transactions" && row.status === "active" && included.some(space => space.long_id === row.workspace_long_id))
       .sort((a, b) => String(data(b).transaction_date).localeCompare(String(data(a).transaction_date))).slice(0, 8);
     view.innerHTML = `<section class="metrics"><article class="metric"><span>Net worth</span><strong>${esc(money(total))}</strong></article><article class="metric"><span>Workspaces</span><strong>${workspaces.length}</strong></article><article class="metric"><span>Accounts</span><strong>${workspaces.reduce((sum, row) => sum + byType("accounts", row.long_id).length, 0)}</strong></article></section>
-      <section class="panel"><header class="panel-head"><div><p class="kicker">Local workspaces</p><h2>Your finances</h2></div>${workspaces.length ? "" : '<button class="primary" type="button" data-new="workspaces">Create workspace</button>'}</header>
-      ${workspaces.length ? `<div class="workspace-grid">${workspaces.map(row => `<article class="workspace-card"><header><span class="workspace-mark">${esc(data(row).name?.[0]?.toUpperCase() || "F")}</span><span class="badge">${data(row).sample ? "Sample" : "Private"}</span></header><h3>${esc(data(row).name)}</h3><strong>${esc(money(workspaceNetUsd(row.long_id)))}</strong><button class="link-button" type="button" data-open-workspace="${esc(row.long_id)}">Open →</button></article>`).join("")}</div>` : `<div class="empty"><h3>Create your first private workspace</h3><p>Start blank or add a removable sample.</p><div class="panel-actions"><button class="primary" type="button" data-new="workspaces">Create workspace</button><button class="ghost" type="button" data-sample>Add sample workspace</button></div></div>`}</section>
+      <section class="panel"><header class="panel-head"><div><p class="kicker">Local workspaces</p><h2>Finances for every part of life</h2></div><button class="primary" type="button" data-new="workspaces">Create workspace</button></header>
+      ${workspaces.length ? `<div class="workspace-grid">${workspaces.map(row => `<article class="workspace-card"><header><span class="workspace-mark">${esc(data(row).name?.[0]?.toUpperCase() || "F")}</span><span class="type-badge is-${workspaceKind(row)}">${esc(workspaceKind(row))}</span></header><h3>${esc(data(row).name)}</h3><strong>${esc(money(workspaceNetUsd(row.long_id)))}</strong><button class="link-button" type="button" data-open-workspace="${esc(row.long_id)}">Open →</button></article>`).join("")}</div>` : `<div class="empty"><h3>Create a Personal, Family, or Group workspace</h3><p>You can create multiple workspaces of every type. All records remain offline.</p><div class="panel-actions"><button class="primary" type="button" data-new="workspaces">Create workspace</button><button class="ghost" type="button" data-sample>Add sample workspace</button></div></div>`}</section>
       <section class="panel"><header class="panel-head"><h2>Recent activity</h2></header>${transactionTable(recent, false)}</section>`;
   };
 
   const renderWorkspaces = () => {
     const workspaces = byType("workspaces", "");
-    view.innerHTML = `<section class="panel"><header class="panel-head"><div><p class="kicker">Finance Manager</p><h2>Workspaces</h2></div><button class="primary" type="button" data-new="workspaces">New workspace</button></header>${workspaces.length ? `<div class="workspace-grid">${workspaces.map(row => `<article class="workspace-card"><header><span class="workspace-mark">${esc(data(row).name?.[0]?.toUpperCase() || "F")}</span><span class="badge">${data(row).sample ? "Sample" : "Private"}</span></header><h3>${esc(data(row).name)}</h3><strong>${esc(money(workspaceNetUsd(row.long_id)))}</strong><div class="row-actions"><button class="link-button" type="button" data-open-workspace="${esc(row.long_id)}">Open</button><button class="link-button" type="button" data-edit="workspaces" data-id="${esc(row.long_id)}">Edit</button>${data(row).sample ? `<button class="danger" type="button" data-delete="workspaces" data-id="${esc(row.long_id)}">Remove sample</button>` : ""}</div></article>`).join("")}</div>` : '<p class="empty">No workspaces yet.</p>'}</section>`;
+    view.innerHTML = `<section class="panel"><header class="panel-head"><div><p class="kicker">Finance Manager</p><h2>Workspaces</h2><p>Create multiple Personal, Family, and Group workspaces in any combination.</p></div><button class="primary" type="button" data-new="workspaces">New workspace</button></header>${workspaces.length ? `<div class="workspace-grid">${workspaces.map(row => `<article class="workspace-card"><header><span class="workspace-mark">${esc(data(row).name?.[0]?.toUpperCase() || "F")}</span><span class="type-badge is-${workspaceKind(row)}">${esc(workspaceKind(row))}</span></header><h3>${esc(data(row).name)}</h3><strong>${esc(money(workspaceNetUsd(row.long_id)))}</strong><div class="row-actions"><button class="link-button" type="button" data-open-workspace="${esc(row.long_id)}">Open</button><button class="link-button" type="button" data-edit="workspaces" data-id="${esc(row.long_id)}">Edit</button>${data(row).sample ? `<button class="danger" type="button" data-delete="workspaces" data-id="${esc(row.long_id)}">Remove sample</button>` : ""}</div></article>`).join("")}</div>` : '<p class="empty">No workspaces yet.</p>'}</section>`;
   };
 
   const renderHelp = () => {
-    view.innerHTML = `<section class="help-grid"><article class="help-card"><h3>Record-only money actions</h3><p>Add funds, withdrawals, and transfers update local records. Finance Manager never moves real money.</p></article><article class="help-card"><h3>Offline and private</h3><p>Records and attachments remain under your Windows profile and work without internet access.</p></article><article class="help-card"><h3>Lite allowances</h3><p>One workspace, 8 accounts, 2,500 transactions, 5 each budgets, goals, and debts, 25 holdings, one scenario, and generous circle limits.</p></article><article class="help-card"><h3>Backups</h3><p>Use Reports to download CSV or a complete JSON backup. Print the report using the A4 layout.</p></article></section>`;
+    view.innerHTML = `<section class="help-grid"><article class="help-card"><h3>Record-only money actions</h3><p>Add funds, withdrawals, and transfers update local records. Finance Manager never moves real money.</p></article><article class="help-card"><h3>Offline and private</h3><p>Personal, Family, and Group workspaces remain single-device records in this Portable app. Online collaboration is unavailable.</p></article><article class="help-card"><h3>Multiple workspaces</h3><p>Create several workspaces of any type, subject to the local safety quotas shown by the app.</p></article><article class="help-card"><h3>Backups</h3><p>Use Reports to download CSV or a schema 2 JSON backup. Print the report using the A4 layout.</p></article></section>`;
   };
 
   const renderWorkspace = () => {
     const workspace = find("workspaces", workspaceId);
     if (!workspace) { workspaceId = ""; topTab = "workspaces"; render(); return; }
-    view.innerHTML = `<header class="workspace-head"><div><button class="link-button" type="button" data-back-workspaces>← Back to workspaces</button><h2>${esc(data(workspace).name)}</h2><p>${esc(data(workspace).native_currency_code || "USD")} workspace</p></div></header>${workspaceTabs()}<section class="panel" id="workspacePanel"></section>`;
+    if (panel === "circles" && workspaceKind(workspace) === "personal" && !byType("circles").length) panel = "overview";
+    view.innerHTML = `<header class="workspace-head"><div><button class="link-button" type="button" data-back-workspaces>← Back to workspaces</button><h2>${esc(data(workspace).name)}</h2><p><span class="type-badge is-${workspaceKind(workspace)}">${esc(workspaceKind(workspace))}</span> ${esc(data(workspace).native_currency_code || "USD")} record-only workspace</p></div></header>${workspaceTabs()}<section class="panel" id="workspacePanel"></section>`;
     const mount = document.getElementById("workspacePanel");
     ({
       overview: renderOverview,
       accounts: renderAccounts,
       transactions: renderTransactions,
-      budgets: () => renderGeneric("budgets"),
-      goals: () => renderGeneric("goals"),
+      recurring: renderRecurring,
+      taxonomy: renderTaxonomy,
+      budgets: renderBudgets,
+      goals: renderGoals,
       debts: renderDebts,
       investments: renderInvestments,
       forecast: renderForecast,
       reports: renderReports,
+      circles: renderCircles,
       settings: renderSettings
     }[panel] || renderOverview)(mount, workspace);
   };
 
   const renderOverview = mount => {
-    const accounts = byType("accounts"), transactions = byType("transactions");
-    const month = today().slice(0, 7);
-    const cashflow = transactions.filter(row => String(data(row).transaction_date).startsWith(month) && ["income", "expense"].includes(data(row).transaction_type))
-      .reduce((sum, row) => sum + (data(row).transaction_type === "income" ? 1 : -1) * Number(data(row).amount_usd_cents || 0), 0);
+    const workspace = find("workspaces", workspaceId), kind = workspaceKind(workspace), accounts = byType("accounts"), transactions = byType("transactions").filter(inSelectedPeriod);
+    const income = transactions.filter(row => data(row).transaction_type === "income").reduce((sum, row) => sum + Number(data(row).amount_usd_cents || 0), 0);
+    const spending = transactions.filter(row => data(row).transaction_type === "expense").reduce((sum, row) => sum + Number(data(row).amount_usd_cents || 0), 0), cashflow = income - spending;
     const recent = [...transactions].sort((a, b) => String(data(b).transaction_date).localeCompare(String(data(a).transaction_date))).slice(0, 8);
-    mount.innerHTML = `<header class="panel-head"><div><h2>Overview</h2><p>Central view of your personal cash finances.</p></div></header><section class="metrics"><article class="metric"><span>Net worth</span><strong>${esc(money(workspaceNetUsd(workspaceId)))}</strong></article><article class="metric"><span>This month cash flow</span><strong>${esc(money(cashflow))}</strong></article><article class="metric"><span>Accounts</span><strong>${accounts.length}</strong></article><article class="metric"><span>Transactions</span><strong>${transactions.length}</strong></article></section><h3>Recent activity</h3>${transactionTable(recent, false)}`;
+    const categoryTotals = new Map();
+    transactions.filter(row => data(row).transaction_type === "expense").forEach(row => (data(row).splits || []).forEach(split => categoryTotals.set(split.category_name || data(find("categories", split.category)).name || "Uncategorized", (categoryTotals.get(split.category_name || data(find("categories", split.category)).name || "Uncategorized") || 0) + Math.round(Number(data(row).amount_usd_cents || 0) * Number(split.amount_cents || 0) / Math.max(1, Number(data(row).amount_cents || 0))))));
+    const upcoming = byType("recurring_rules").filter(row => data(row).next_date >= today()).sort((a, b) => String(data(a).next_date).localeCompare(String(data(b).next_date))).slice(0, 5);
+    const description = { personal: "Your net worth, income, spending, savings, and goals.", family: "Your household balance, budget health, shared goals, and upcoming records.", group: "Your group balance, inflow, outflow, budgets, and circle activity." }[kind];
+    mount.innerHTML = `<header class="panel-head"><div><h2>Overview</h2><p>${esc(description)}</p></div><button class="primary" type="button" data-new="transactions">Add transaction</button></header>${periodControl()}<section class="metrics"><article class="metric"><span>${kind === "group" ? "Group balance" : "Net worth"}</span><strong>${esc(money(workspaceNetUsd(workspaceId)))}</strong></article><article class="metric"><span>${kind === "group" ? "Inflow" : "Income"}</span><strong>${esc(money(income))}</strong></article><article class="metric"><span>${kind === "group" ? "Outflow" : "Spending"}</span><strong>${esc(money(spending))}</strong></article><article class="metric"><span>${kind === "personal" ? "Savings rate" : "Net cash flow"}</span><strong>${kind === "personal" ? `${income ? Math.round(cashflow / income * 100) : 0}%` : esc(money(cashflow))}</strong></article></section><div class="overview-grid"><section class="chart-card"><h3>Top categories</h3>${[...categoryTotals].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, value]) => `<p><span>${esc(name)}</span><strong>${esc(money(value))}</strong></p>`).join("") || "<p>No categorized spending in this period.</p>"}</section><section class="chart-card"><h3>Upcoming recurring records</h3>${upcoming.map(row => `<p><span>${esc(data(row).payee || data(row).name)}</span><strong>${esc(dateLabel(data(row).next_date))}</strong></p>`).join("") || "<p>No upcoming recurring records.</p>"}</section></div><h3>Recent activity</h3>${transactionTable(recent, false)}`;
   };
 
   const renderAccounts = mount => {
@@ -428,11 +513,12 @@
   const renderTransactions = mount => {
     const search = mount.dataset.search || "";
     const status = mount.dataset.status || "";
+    const tag = mount.dataset.tag || "";
     const sort = mount.dataset.sort || "date_desc";
-    let rows = byType("transactions").filter(row => !status || data(row).state === status).filter(row => !search || `${data(row).payee} ${data(row).note}`.toLowerCase().includes(search.toLowerCase()));
+    let rows = byType("transactions").filter(inSelectedPeriod).filter(row => !status || data(row).state === status).filter(row => !tag || normalizeTagNames(data(row).tags).split(", ").some(value => value.toLocaleLowerCase() === tag.toLocaleLowerCase())).filter(row => !search || `${data(row).payee} ${data(row).note}`.toLowerCase().includes(search.toLowerCase()));
     rows.sort((a, b) => sort === "date_asc" ? String(data(a).transaction_date).localeCompare(String(data(b).transaction_date)) : sort === "amount_desc" ? Number(data(b).amount_usd_cents) - Number(data(a).amount_usd_cents) : sort === "amount_asc" ? Number(data(a).amount_usd_cents) - Number(data(b).amount_usd_cents) : sort === "payee" ? String(data(a).payee).localeCompare(String(data(b).payee)) : String(data(b).transaction_date).localeCompare(String(data(a).transaction_date)));
-    mount.innerHTML = `<header class="panel-head"><div><h2>Transactions</h2><p>Income, expenses, withdrawals, deposits, and balanced transfers.</p></div><div class="panel-actions"><button class="ghost" type="button" data-import>Import</button><button class="ghost" type="button" data-new="recurring_rules">Recurring</button><button class="ghost" type="button" data-generate-recurring>Review due</button><button class="ghost" type="button" data-reconcile>Reconcile</button><button class="primary" type="button" data-new="transactions">Add transaction</button></div></header><div class="filters"><input type="search" data-filter-search placeholder="Search" value="${esc(search)}"><select data-filter-status>${optionHtml([{ value: "", label: "All statuses" }, "pending", "cleared", "reconciled"], status)}</select><select data-filter-sort>${optionHtml([{ value: "date_desc", label: "Newest first" }, { value: "date_asc", label: "Oldest first" }, { value: "amount_desc", label: "Amount high to low" }, { value: "amount_asc", label: "Amount low to high" }, { value: "payee", label: "Payee A-Z" }], sort)}</select></div>${transactionTable(rows)}`;
-    mount.dataset.search = search; mount.dataset.status = status; mount.dataset.sort = sort;
+    mount.innerHTML = `<header class="panel-head"><div><h2>Activity</h2><p>Income, expenses, withdrawals, deposits, and balanced transfers.</p></div><div class="panel-actions"><button class="ghost" type="button" data-import>Import</button><button class="ghost" type="button" data-reconcile>Reconcile</button><button class="primary" type="button" data-new="transactions">Add transaction</button></div></header>${periodControl()}<div class="filters"><input type="search" data-filter-search placeholder="Search" value="${esc(search)}"><select data-filter-status>${optionHtml([{ value: "", label: "All statuses" }, "pending", "cleared", "reconciled"], status)}</select><select data-filter-tag>${optionHtml([{ value: "", label: "All tags" }, ...byType("tags").filter(row => !data(row).archived).map(row => ({ value: data(row).name, label: data(row).name }))], tag)}</select><select data-filter-sort>${optionHtml([{ value: "date_desc", label: "Newest first" }, { value: "date_asc", label: "Oldest first" }, { value: "amount_desc", label: "Amount high to low" }, { value: "amount_asc", label: "Amount low to high" }, { value: "payee", label: "Payee A-Z" }], sort)}</select></div>${transactionTable(rows)}`;
+    mount.dataset.search = search; mount.dataset.status = status; mount.dataset.tag = tag; mount.dataset.sort = sort;
   };
 
   const renderGeneric = (type, mount = document.getElementById("workspacePanel")) => {
@@ -464,8 +550,53 @@
     if (!rows.length) return;
     mount.insertAdjacentHTML("beforeend", `<section class="report-grid">${rows.map(row => {
       const planned = Number(data(row).planned_usd_cents || 0), actual = budgetActual(row), remaining = planned - actual, percent = planned ? Math.min(100, Math.round(actual / planned * 100)) : 0;
-      return `<article class="chart-card"><h3>${esc(data(row).name)}</h3><p>Planned ${esc(money(planned))}<br>Actual ${esc(money(actual))}<br>Remaining ${esc(money(remaining))}</p><div class="bar"><span style="width:${percent}%"></span></div></article>`;
+      const status = percent >= 100 ? "Exceeded" : percent >= 80 ? "Watch" : "On track";
+      return `<article class="chart-card"><header><h3>${esc(data(row).name)}</h3><span class="health is-${status.toLowerCase().replaceAll(" ", "-")}">${status}</span></header><p>Planned ${esc(money(planned))}<br>Actual ${esc(money(actual))}<br>Remaining ${esc(money(remaining))}</p><div class="bar"><span style="width:${percent}%"></span></div></article>`;
     }).join("")}</section>`);
+  };
+
+  const renderGoals = mount => {
+    renderGeneric("goals", mount);
+    const rows = byType("goals");
+    if (!rows.length) return;
+    const dueSoon = new Date(); dueSoon.setUTCDate(dueSoon.getUTCDate() + 30);
+    mount.insertAdjacentHTML("beforeend", `<section class="report-grid">${rows.map(row => {
+      const item = data(row), target = Math.max(1, Number(item.target_usd_cents || 0)), current = Math.max(0, Number(item.current_usd_cents || 0)), percent = Math.min(100, Math.round(current / target * 100));
+      const status = current >= target ? "Completed" : item.target_date && item.target_date < today() ? "Overdue" : item.target_date && item.target_date <= dueSoon.toISOString().slice(0, 10) ? "Due soon" : "In progress";
+      return `<article class="chart-card"><header><h3>${esc(item.name)}</h3><span class="health is-${status.toLowerCase().replaceAll(" ", "-")}">${status}</span></header><strong>${percent}%</strong><div class="bar"><span style="width:${percent}%"></span></div><p>Remaining ${esc(money(Math.max(0, target - current)))}${item.target_date ? `<br>Target ${esc(dateLabel(item.target_date))}` : ""}</p></article>`;
+    }).join("")}</section>`);
+  };
+
+  const recurringSuggestions = () => {
+    const cutoff = new Date(); cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1); const cutoffDate = cutoff.toISOString().slice(0, 10), groups = new Map();
+    byType("transactions").filter(row => data(row).transaction_date >= cutoffDate && ["income", "expense"].includes(data(row).transaction_type) && data(row).payee && ["", "manual", "import"].includes(data(row).source || "")).forEach(row => {
+      const item = data(row), key = `${item.account}|${item.transaction_type}|${item.native_currency_code}|${item.payee.trim().toLocaleLowerCase()}`;
+      if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row);
+    });
+    const ignored = new Set(JSON.parse(localStorage.getItem(`financeIgnoredRecurring:${workspaceId}`) || "[]")), output = [];
+    groups.forEach((rows, key) => {
+      if (rows.length < 2 || ignored.has(key)) return;
+      rows.sort((a, b) => String(data(a).transaction_date).localeCompare(String(data(b).transaction_date)));
+      const intervals = rows.slice(1).map((row, index) => Math.round((new Date(`${data(row).transaction_date}T00:00:00Z`) - new Date(`${data(rows[index]).transaction_date}T00:00:00Z`)) / 86400000)), average = intervals.reduce((sum, value) => sum + value, 0) / intervals.length;
+      const frequency = average >= 6 && average <= 8 ? "weekly" : average >= 26 && average <= 35 ? "monthly" : average >= 80 && average <= 100 ? "quarterly" : average >= 350 && average <= 380 ? "yearly" : "";
+      if (!frequency) return;
+      const amounts = rows.map(row => Number(data(row).amount_cents || 0)).sort((a, b) => a - b), median = amounts[Math.floor((amounts.length - 1) / 2)];
+      if (!median || (amounts.at(-1) - amounts[0]) / median > .2) return;
+      const last = data(rows.at(-1)), next = new Date(`${last.transaction_date}T00:00:00Z`);
+      if (frequency === "weekly") next.setUTCDate(next.getUTCDate() + 7); else if (frequency === "quarterly") next.setUTCMonth(next.getUTCMonth() + 3); else if (frequency === "yearly") next.setUTCFullYear(next.getUTCFullYear() + 1); else next.setUTCMonth(next.getUTCMonth() + 1);
+      output.push({ key, name: last.payee, payee: last.payee, account: last.account, transaction_type: last.transaction_type, recurring_kind: last.transaction_type === "income" ? "income" : "bill", value: amount(median), frequency, next_date: next.toISOString().slice(0, 10), category: last.splits?.[0]?.category || "", tags: last.tags || "", occurrences: rows.length });
+    });
+    return output;
+  };
+
+  const renderRecurring = mount => {
+    const rules = byType("recurring_rules"), suggestions = recurringSuggestions();
+    mount.innerHTML = `<header class="panel-head"><div><h2>Recurring & subscriptions</h2><p>Review repeating records. No rule is created silently.</p></div><div class="panel-actions"><button class="ghost" type="button" data-generate-recurring>Review due</button><button class="primary" type="button" data-new="recurring_rules">Add rule</button></div></header>${suggestions.length ? `<section class="suggestions"><header><h3>Suggested recurring records</h3><p>Confirm or ignore patterns detected from the last 12 months.</p></header>${suggestions.map(item => `<article><div><strong>${esc(item.payee)}</strong><small>${item.occurrences} records, ${esc(item.frequency)}</small></div><div class="row-actions"><button class="primary" type="button" data-accept-suggestion="${esc(encodeURIComponent(JSON.stringify(item)))}">Review rule</button><button class="ghost" type="button" data-ignore-suggestion="${esc(encodeURIComponent(item.key))}">Ignore</button></div></article>`).join("")}</section>` : ""}${table(["Name", "Kind", "Account", "Frequency", "Next date", "Amount", ""], rules.map(row => `<tr><td>${esc(data(row).payee || data(row).name)}</td><td>${esc(data(row).recurring_kind || data(row).transaction_type)}</td><td>${esc(data(find("accounts", data(row).account)).name || "")}</td><td>${esc(data(row).frequency)}</td><td>${esc(dateLabel(data(row).next_date))}</td><td>${esc(money(data(row).amount_usd_cents))}</td><td>${rowActions("recurring_rules", row)}</td></tr>`))}`;
+  };
+
+  const renderTaxonomy = mount => {
+    const categories = byType("categories"), tags = byType("tags");
+    mount.innerHTML = `<header class="panel-head"><div><h2>Categories & tags</h2><p>Manage consistent labels for transactions, budgets, reports, and search.</p></div></header><div class="taxonomy-grid"><section><header><h3>Categories</h3><button class="primary" type="button" data-new="categories">Add category</button></header>${table(["Name", "Type", "Status", ""], categories.map(row => `<tr><td>${esc(data(row).name)}</td><td>${esc(data(row).category_type)}</td><td>${data(row).archived ? "Archived" : "Active"}</td><td>${data(row).archived ? `<button class="link-button" type="button" data-restore-taxonomy="categories" data-id="${esc(row.long_id)}">Restore</button>` : rowActions("categories", row)}</td></tr>`))}</section><section><header><h3>Tags</h3><button class="primary" type="button" data-new="tags">Add tag</button></header>${table(["Name", "Status", ""], tags.map(row => `<tr><td>${esc(data(row).name)}</td><td>${data(row).archived ? "Archived" : "Active"}</td><td>${data(row).archived ? `<button class="link-button" type="button" data-restore-taxonomy="tags" data-id="${esc(row.long_id)}">Restore</button>` : rowActions("tags", row)}</td></tr>`))}</section></div>`;
   };
 
   const debtBalance = debt => Math.max(0, Number(data(debt).balance_usd_cents || 0) - byType("debt_payments").filter(row => data(row).debt === debt.long_id).reduce((sum, row) => sum + Number(data(row).principal_usd_cents || 0), 0));
@@ -502,26 +633,27 @@
   };
 
   const renderReports = mount => {
-    const tx = byType("transactions"), accounts = byType("accounts"), budgets = byType("budgets"), goals = byType("goals"), debts = byType("debts"), investments = byType("investments"), circles = byType("circle_entries");
+    const tx = byType("transactions").filter(inSelectedPeriod), accounts = byType("accounts"), budgets = byType("budgets"), goals = byType("goals"), debts = byType("debts"), investments = byType("investments"), circles = byType("circle_entries");
     const months = {};
     tx.filter(row => ["income", "expense"].includes(data(row).transaction_type)).forEach(row => {
       const key = String(data(row).transaction_date).slice(0, 7);
       months[key] ||= { income: 0, expense: 0 };
       months[key][data(row).transaction_type] += Number(data(row).amount_usd_cents || 0);
     });
-    mount.innerHTML = `<header class="panel-head"><div><h2>Reports</h2><p>Cash flow, net worth, budgets, goals, debts, investments, currency exposure, circles, and comparisons.</p></div><div class="panel-actions"><button class="ghost" type="button" data-export-csv>Export CSV</button><button class="ghost" type="button" data-export-json>JSON backup</button><button class="primary" type="button" data-print>Print A4 report</button></div></header><section class="metrics"><article class="metric"><span>Net worth</span><strong>${esc(money(workspaceNetUsd(workspaceId)))}</strong></article><article class="metric"><span>Goals</span><strong>${goals.length}</strong></article><article class="metric"><span>Debts</span><strong>${debts.length}</strong></article><article class="metric"><span>Investment gain</span><strong>${esc(money(investments.reduce((sum, row) => sum + Number(data(row).current_value_usd_cents || 0) - Number(data(row).cost_basis_usd_cents || 0), 0)))}</strong></article></section>
+    const income = tx.filter(row => data(row).transaction_type === "income").reduce((sum, row) => sum + Number(data(row).amount_usd_cents || 0), 0), spending = tx.filter(row => data(row).transaction_type === "expense").reduce((sum, row) => sum + Number(data(row).amount_usd_cents || 0), 0);
+    mount.innerHTML = `<header class="panel-head"><div><h2>Reports</h2><p>Cash flow, net worth, budgets, goals, debts, investments, currency exposure, circles, and comparisons.</p></div><div class="panel-actions"><button class="ghost" type="button" data-export-csv>Export CSV</button><button class="ghost" type="button" data-export-json>JSON backup</button><button class="primary" type="button" data-print>Print A4 report</button></div></header>${periodControl()}<section class="metrics"><article class="metric"><span>Income</span><strong>${esc(money(income))}</strong></article><article class="metric"><span>Spending</span><strong>${esc(money(spending))}</strong></article><article class="metric"><span>Net cash flow</span><strong>${esc(money(income - spending))}</strong></article><article class="metric"><span>Transactions</span><strong>${tx.length}</strong></article></section>
       <h3>Cash-flow comparison</h3>${table(["Period", "Income", "Expenses", "Net"], Object.entries(months).sort(([a], [b]) => b.localeCompare(a)).map(([period, item]) => `<tr><td>${esc(period)}</td><td>${esc(money(item.income))}</td><td>${esc(money(item.expense))}</td><td>${esc(money(item.income - item.expense))}</td></tr>`))}
       <section class="report-grid"><article class="chart-card"><h3>Budget variance</h3>${budgets.map(row => `<p>${esc(data(row).name)}: ${esc(money(Number(data(row).planned_usd_cents) - budgetActual(row)))}</p>`).join("") || "<p>No budgets</p>"}</article><article class="chart-card"><h3>Currency exposure</h3>${Object.entries(accounts.reduce((out, row) => { out[data(row).native_currency_code] = (out[data(row).native_currency_code] || 0) + accountBalanceUsd(row); return out; }, {})).map(([code, value]) => `<p>${esc(code)}: ${esc(money(value))}</p>`).join("") || "<p>No accounts</p>"}</article><article class="chart-card"><h3>Circle ledger</h3><p>${circles.length} entries recorded separately from net worth.</p></article></section>`;
   };
 
   const circlePosition = member => byType("circle_entries").filter(row => data(row).member === member.long_id).reduce((sum, row) => sum + (["contribution", "repayment"].includes(data(row).entry_type) ? 1 : -1) * Number(data(row).amount_usd_cents || 0), 0);
+  const renderCircles = mount => {
+    const workspace = find("workspaces", workspaceId), kind = workspaceKind(workspace), circles = byType("circles"), members = byType("circle_members"), entries = byType("circle_entries"), canCreate = kind !== "personal";
+    mount.innerHTML = `<header class="panel-head"><div><h2>Circles</h2><p>Offline contribution and loan ledgers. They never affect accounts or net worth.</p>${kind === "personal" ? "<small>Existing circles remain visible. Change this workspace to Family or Group to create another.</small>" : ""}</div><div class="panel-actions">${canCreate ? '<button class="ghost" type="button" data-new="circles">Add circle</button>' : ""}${circles.length ? '<button class="ghost" type="button" data-new="circle_members">Add person</button>' : ""}${members.length ? '<button class="primary" type="button" data-new="circle_entries">Record entry</button>' : ""}</div></header>${table(["Circle", "Person", "Position"], members.map(row => `<tr><td>${esc(data(find("circles", data(row).circle)).name || "")}</td><td>${esc(data(row).name)}</td><td>${esc(money(circlePosition(row)))}</td></tr>`))}<h3>Circle ledger entries</h3>${table(["Date", "Circle", "Person", "Type", "Amount", ""], entries.map(row => `<tr><td>${esc(dateLabel(data(row).entry_date))}</td><td>${esc(data(find("circles", data(row).circle)).name || "")}</td><td>${esc(data(find("circle_members", data(row).member)).name || "")}</td><td>${esc(data(row).entry_type)}</td><td>${esc(money(data(row).amount_usd_cents))}</td><td>${rowActions("circle_entries", row)}</td></tr>`))}`;
+  };
   const renderSettings = (mount, workspace) => {
-    const circles = byType("circles"), members = byType("circle_members"), entries = byType("circle_entries");
-    mount.innerHTML = `<header class="panel-head"><div><h2>Settings</h2><p>Workspace visibility, local currency rates, circles, and private data.</p></div><button class="ghost" type="button" data-edit="workspaces" data-id="${esc(workspace.long_id)}">Edit workspace</button></header>
-      <section class="help-grid"><article class="help-card"><h3>Home totals</h3><p>${data(workspace).include_home === false ? "Excluded" : "Included"} in Home totals. Balances are ${data(workspace).hide_balances ? "hidden" : "visible"} by default.</p></article><article class="help-card"><h3>Local storage</h3><p>Hiding Finance Manager keeps every record and attachment on this device.</p></article></section>
-      <header class="panel-head"><div><h2>Circles</h2><p>Separate contribution and loan pool ledgers. They never affect accounts or net worth.</p></div><div class="panel-actions"><button class="ghost" type="button" data-new="circles">Add circle</button>${circles.length ? '<button class="ghost" type="button" data-new="circle_members">Add person</button>' : ""}${members.length ? '<button class="primary" type="button" data-new="circle_entries">Record entry</button>' : ""}</div></header>
-      ${table(["Circle", "Person", "Position"], members.map(row => `<tr><td>${esc(data(find("circles", data(row).circle)).name || "")}</td><td>${esc(data(row).name)}</td><td>${esc(money(circlePosition(row)))}</td></tr>`))}
-      <h3>Circle ledger entries</h3>${table(["Date", "Circle", "Person", "Type", "Amount", ""], entries.map(row => `<tr><td>${esc(dateLabel(data(row).entry_date))}</td><td>${esc(data(find("circles", data(row).circle)).name || "")}</td><td>${esc(data(find("circle_members", data(row).member)).name || "")}</td><td>${esc(data(row).entry_type)}</td><td>${esc(money(data(row).amount_usd_cents))}</td><td>${rowActions("circle_entries", row)}</td></tr>`))}`;
+    const ignoredCount = JSON.parse(localStorage.getItem(`financeIgnoredRecurring:${workspaceId}`) || "[]").length;
+    mount.innerHTML = `<header class="panel-head"><div><h2>Settings</h2><p>Workspace identity, type, display, and private local data.</p></div><div class="panel-actions"><button class="ghost" type="button" data-restore-json>Restore JSON backup</button><button class="ghost" type="button" data-edit="workspaces" data-id="${esc(workspace.long_id)}">Edit workspace</button></div></header><section class="help-grid"><article class="help-card"><h3>Workspace type</h3><p><span class="type-badge is-${workspaceKind(workspace)}">${esc(workspaceKind(workspace))}</span> Type changes preserve every local financial record.</p></article><article class="help-card"><h3>Home totals</h3><p>${data(workspace).include_home === false ? "Excluded" : "Included"} in Home totals. Balances are ${data(workspace).hide_balances ? "hidden" : "visible"} by default.</p></article><article class="help-card"><h3>Portable collaboration</h3><p>Family and Group organization is offline and single-device. Invitations, accounts, and hosted collaboration are not included.</p></article><article class="help-card"><h3>Ignored suggestions</h3><p>${ignoredCount} recurring pattern${ignoredCount === 1 ? "" : "s"} ignored.</p>${ignoredCount ? '<button class="ghost" type="button" data-restore-suggestions>Restore suggestions</button>' : ""}</article><article class="help-card"><h3>Local storage</h3><p>Hiding Finance Manager keeps every record and attachment on this device.</p></article></section>`;
   };
 
   const render = () => {
@@ -536,6 +668,7 @@
     title: "Workspace",
     fields: [
       field("name", "Name", "text", { required: true, maxlength: 160 }),
+      field("workspace_kind", "Workspace type", "select", { options: ["personal", "family", "group"] }),
       field("native_currency_code", "Currency", "currency"),
       field("include_home", "Include in Home totals", "checkbox", { value: true }),
       field("hide_balances", "Hide balances by default", "checkbox"),
@@ -550,7 +683,7 @@
     const values = editorValues(), { recordType, row } = activeEditor;
     try {
       if (recordType === "workspaces") {
-        const recordData = { ...data(row), ...values, include_home: values.include_home === "1", hide_balances: values.hide_balances === "1", sample: values.sample === "1" };
+        const recordData = { ...data(row), ...values, workspace_kind: ["personal", "family", "group"].includes(values.workspace_kind) ? values.workspace_kind : "personal", include_home: values.include_home === "1", hide_balances: values.hide_balances === "1", sample: values.sample === "1" };
         await save("workspaces", recordData, { long_id: row?.long_id || "", workspace_long_id: "" });
       } else if (recordType === "transactions" && values.transaction_type === "transfer" && !row) {
         if (!values.account || !values.destination_account || values.account === values.destination_account) throw new Error("Choose two different accounts.");
@@ -564,6 +697,7 @@
           { record_type: "transactions", workspace_long_id: workspaceId, data: { ...common, transaction_type: "transfer_in", account: to.long_id, destination_account: from.long_id, amount_cents: toNative, amount_usd_cents: toSnap.usd_cents, fx_rate: toSnap.fx_rate, native_currency_code: data(to).native_currency_code, splits: [] } }
         ]);
       } else {
+        if (recordType === "circles" && workspaceKind(find("workspaces", workspaceId)) === "personal") throw new Error("Change this workspace to Family or Group before creating a circle.");
         const normalized = normalizeRecord(recordType, values, data(row));
         if (row && ["transfer_in", "transfer_out"].includes(data(row).transaction_type)) {
           normalized.account = data(row).account;
@@ -576,6 +710,7 @@
           normalized.transfer_group = data(row).transfer_group;
         }
         await save(recordType, normalized, { long_id: row?.long_id || "" });
+        if (["transactions", "recurring_rules"].includes(recordType)) await ensureTags(normalized.tags);
       }
       dialog.close();
       notify("Saved locally.");
@@ -587,7 +722,7 @@
 
   const sampleWorkspace = async () => {
     try {
-      const workspace = { record_type: "workspaces", workspace_long_id: "", data: { name: "Sample household", native_currency_code: "USD", include_home: true, hide_balances: false, sample: true } };
+      const workspace = { record_type: "workspaces", workspace_long_id: "", data: { name: "Sample household", workspace_kind: "family", native_currency_code: "USD", include_home: true, hide_balances: false, sample: true } };
       const result = await bridge("batch_save", { records: [workspace], sample: true });
       await reload();
       workspaceId = result.workspace_long_id || byType("workspaces", "")[0]?.long_id || "";
@@ -601,7 +736,7 @@
     if (!due.length) { notify("No recurring entries are due."); return; }
     const rows = due.map(rule => {
       const item = data(rule);
-      return { record_type: "transactions", workspace_long_id: workspaceId, data: { transaction_type: item.transaction_type, account: item.account, amount_cents: item.amount_cents, amount_usd_cents: item.amount_usd_cents, fx_rate: item.fx_rate, native_currency_code: item.native_currency_code, transaction_date: item.next_date, payee: item.payee || item.name, note: item.note, state: "pending", recurring_rule: rule.long_id, fingerprint: `recurring|${rule.long_id}|${item.next_date}`, splits: [] } };
+      return { record_type: "transactions", workspace_long_id: workspaceId, data: { transaction_type: item.transaction_type, account: item.account, amount_cents: item.amount_cents, amount_usd_cents: item.amount_usd_cents, fx_rate: item.fx_rate, native_currency_code: item.native_currency_code, transaction_date: item.next_date, payee: item.payee || item.name, note: item.note, tags: item.tags || "", state: "pending", recurring_rule: rule.long_id, fingerprint: `recurring|${rule.long_id}|${item.next_date}`, splits: item.category ? [{ category: item.category, category_name: data(find("categories", item.category)).name || "", amount_cents: item.amount_cents, note: "" }] : [] } };
     });
     try {
       await saveBatch(rows);
@@ -648,7 +783,51 @@
     });
     download(`finance-transactions-${today()}.csv`, [header.join(","), ...lines].join("\r\n"), "text/csv");
   };
-  const exportJson = () => download(`finance-backup-${today()}.json`, JSON.stringify({ schema: 1, plugin: "finance-manager", exported_at: new Date().toISOString(), workspace: find("workspaces", workspaceId), records: state.records.filter(row => row.workspace_long_id === workspaceId), attachments: state.attachments.filter(item => item.workspace_long_id === workspaceId) }, null, 2), "application/json");
+  const exportJson = async () => {
+    const attachments = [];
+    for (const item of state.attachments.filter(value => value.workspace_long_id === workspaceId && value.status === "active")) {
+      const file = await bridge("attachment_get", { long_id: item.long_id });
+      attachments.push({ transaction_long_id: item.transaction_long_id, original_name: file.original_name || item.original_name, mime_type: file.mime_type || item.mime_type, content_base64: file.content_base64 });
+    }
+    download(`finance-backup-${today()}.json`, JSON.stringify({ schema: 2, plugin: "finance-manager", exported_at: new Date().toISOString(), workspace: find("workspaces", workspaceId), records: state.records.filter(row => row.workspace_long_id === workspaceId), attachments, period_preference: periodPreference() }, null, 2), "application/json");
+  };
+  const restoreJsonBackup = async file => {
+    const backup = JSON.parse(await file.text());
+    if (backup?.plugin !== "finance-manager" || ![1, 2].includes(Number(backup.schema)) || !backup.workspace || !Array.isArray(backup.records)) throw new Error("Choose a Finance Manager schema 1 or schema 2 JSON backup.");
+    const sourceWorkspace = data(backup.workspace), restoredWorkspace = { ...sourceWorkspace, name: `${sourceWorkspace.name || "Restored workspace"} - restored`, workspace_kind: ["personal", "family", "group"].includes(sourceWorkspace.workspace_kind) ? sourceWorkspace.workspace_kind : "personal", sample: false };
+    const workspaceResult = await save("workspaces", restoredWorkspace, { workspace_long_id: "" }), newWorkspace = workspaceResult.long_id, idMap = new Map(), categoryMap = new Map();
+    workspaceId = newWorkspace; panel = "overview";
+    const records = backup.records.filter(row => row && typeof row === "object"), order = ["categories", "tags", "accounts", "goals", "budgets", "debts", "investments", "scenarios", "circles", "circle_members", "recurring_rules", "transactions", "debt_payments", "circle_entries"];
+    const mapReference = value => idMap.get(String(value || "")) || String(value || "");
+    const ensureLegacyCategory = async (value, type) => {
+      const source = String(value || ""); if (!source) return ""; if (idMap.has(source)) return idMap.get(source);
+      const key = `${type}|${source.toLocaleLowerCase()}`; if (categoryMap.has(key)) return categoryMap.get(key);
+      const result = await save("categories", { name: source.slice(0, 120), category_type: type, parent: "", archived: false }, { workspace_long_id: newWorkspace }); categoryMap.set(key, result.long_id); return result.long_id;
+    };
+    for (const type of order) for (const row of records.filter(item => item.record_type === type)) {
+      const item = { ...data(row) };
+      for (const field of ["account", "destination_account", "goal", "debt", "circle", "member"]) if (item[field]) item[field] = mapReference(item[field]);
+      if (type === "categories") item.parent = idMap.get(String(item.parent || "")) || "";
+      if (type === "transactions") {
+        item.splits = await Promise.all((item.splits || []).map(async split => { const category = await ensureLegacyCategory(split.category, item.transaction_type === "income" ? "income" : "expense"); return { ...split, category, category_name: data(find("categories", category)).name || split.category_name || "" }; }));
+        item.tags = normalizeTagNames(item.tags);
+      }
+      if (["budgets", "recurring_rules"].includes(type) && item.category) item.category = await ensureLegacyCategory(item.category, item.transaction_type === "income" ? "income" : "expense");
+      if (type === "recurring_rules") item.recurring_kind = ["income", "bill", "subscription"].includes(item.recurring_kind) ? item.recurring_kind : item.transaction_type === "income" ? "income" : "bill";
+      const result = await save(type, item, { workspace_long_id: newWorkspace }); if (row.long_id) idMap.set(row.long_id, result.long_id);
+      if (["transactions", "recurring_rules"].includes(type)) await ensureTags(item.tags);
+    }
+    for (const row of records.filter(item => item.record_type === "categories" && data(item).parent && idMap.has(item.long_id) && idMap.has(data(item).parent))) {
+      const restored = find("categories", idMap.get(row.long_id)); await save("categories", { ...data(restored), parent: idMap.get(data(row).parent) }, { long_id: restored.long_id });
+    }
+    for (const attachment of Array.isArray(backup.attachments) ? backup.attachments : []) {
+      const transaction = idMap.get(String(attachment.transaction_long_id || ""));
+      if (!transaction || !attachment.original_name || !attachment.content_base64) continue;
+      await bridge("attachment_upload", { workspace_long_id: newWorkspace, transaction_long_id: transaction, original_name: attachment.original_name, mime_type: attachment.mime_type || "application/octet-stream", content_base64: attachment.content_base64 });
+    }
+    if (backup.period_preference) localStorage.setItem(`financePeriod:${newWorkspace}`, JSON.stringify(backup.period_preference));
+    notify(`Backup restored into ${restoredWorkspace.name}.`); render();
+  };
 
   const splitCsv = line => {
     const cells = []; let value = "", quoted = false;
@@ -749,6 +928,27 @@
   };
 
   document.addEventListener("click", async event => {
+    if (event.target.closest("[data-add-split]")) { fieldsMount.querySelector("[data-split-lines]")?.insertAdjacentHTML("beforeend", splitLineHtml()); syncPortableSplits(); return; }
+    const removeSplit = event.target.closest("[data-remove-split]");
+    if (removeSplit) { removeSplit.closest(".split-line")?.remove(); syncPortableSplits(); return; }
+    const acceptSuggestion = event.target.closest("[data-accept-suggestion]");
+    if (acceptSuggestion) { openEditor("recurring_rules", null, JSON.parse(decodeURIComponent(acceptSuggestion.dataset.acceptSuggestion))); return; }
+    const ignoreSuggestion = event.target.closest("[data-ignore-suggestion]");
+    if (ignoreSuggestion) {
+      const storageKey = `financeIgnoredRecurring:${workspaceId}`, ignored = new Set(JSON.parse(localStorage.getItem(storageKey) || "[]"));
+      ignored.add(decodeURIComponent(ignoreSuggestion.dataset.ignoreSuggestion)); localStorage.setItem(storageKey, JSON.stringify([...ignored])); notify("Suggestion ignored. You can clear ignored suggestions from workspace Settings."); render(); return;
+    }
+    const restoreTaxonomy = event.target.closest("[data-restore-taxonomy]");
+    if (restoreTaxonomy) {
+      const row = find(restoreTaxonomy.dataset.restoreTaxonomy, restoreTaxonomy.dataset.id);
+      try { await save(restoreTaxonomy.dataset.restoreTaxonomy, { ...data(row), archived: false }, { long_id: row.long_id }); notify("Restored locally."); render(); } catch (error) { notify(error.message, false); }
+      return;
+    }
+    if (event.target.closest("[data-restore-suggestions]")) { localStorage.removeItem(`financeIgnoredRecurring:${workspaceId}`); notify("Recurring suggestions restored."); render(); return; }
+    if (event.target.closest("[data-restore-json]")) {
+      const picker = document.createElement("input"); picker.type = "file"; picker.accept = ".json,application/json";
+      picker.addEventListener("change", async () => { try { if (picker.files[0]) await restoreJsonBackup(picker.files[0]); } catch (error) { notify(error.message, false); } }); picker.click(); return;
+    }
     const top = event.target.closest("[data-top]");
     if (top) { topTab = top.dataset.top; workspaceId = ""; render(); return; }
     const open = event.target.closest("[data-open-workspace]");
@@ -770,7 +970,7 @@
           for (const item of pair) await remove("transactions", item.long_id);
         } else await remove(deleteButton.dataset.delete, deleteButton.dataset.id);
         if (deleteButton.dataset.delete === "workspaces") workspaceId = "";
-        notify("Deleted locally."); render();
+        notify(["categories", "tags"].includes(deleteButton.dataset.delete) ? "Archived locally. Referenced records were preserved." : "Deleted locally."); render();
       } catch (error) { notify(error.message, false); }
       return;
     }
@@ -784,7 +984,7 @@
       importDialog.showModal(); return;
     }
     if (event.target.closest("[data-export-csv]")) { exportCsv(); return; }
-    if (event.target.closest("[data-export-json]")) { exportJson(); return; }
+    if (event.target.closest("[data-export-json]")) { try { await exportJson(); } catch (error) { notify(error.message, false); } return; }
     if (event.target.closest("[data-print]")) { print(); return; }
     const attachButton = event.target.closest("[data-attach]");
     if (attachButton) { await attach(attachButton.dataset.attach); return; }
@@ -793,6 +993,7 @@
   });
 
   document.addEventListener("input", event => {
+    if (event.target.matches("[data-split-amount], #recordForm [name='value']")) syncPortableSplits();
     const mount = document.getElementById("workspacePanel");
     if (!mount || panel !== "transactions") return;
     if (event.target.matches("[data-filter-search]")) mount.dataset.search = event.target.value;
@@ -808,9 +1009,23 @@
         await reload(); notify("Display currency saved."); render();
       } catch (error) { notify(error.message, false); }
     }
-    if (event.target.matches("[data-filter-status], [data-filter-sort]")) {
+    if (event.target.matches("[data-period-preset], [data-period-start], [data-period-end]")) {
+      const current = periodPreference(), container = event.target.closest(".period-control"), preset = container.querySelector("[data-period-preset]").value;
+      const next = { ...current, preset, start: container.querySelector("[data-period-start]")?.value || "", end: container.querySelector("[data-period-end]")?.value || "" };
+      container.querySelectorAll(".custom-period").forEach(item => { item.hidden = preset !== "custom"; });
+      if (preset !== "custom" || (next.start && next.end && next.start <= next.end)) { localStorage.setItem(`financePeriod:${workspaceId}`, JSON.stringify(next)); render(); }
+      return;
+    }
+    if (event.target.matches("#recordForm [name='transaction_type']")) {
+      const transfer = event.target.value === "transfer", destination = form.elements.destination_account?.closest("label"), category = form.elements.category?.closest("label"), split = fieldsMount.querySelector("[data-split-editor]");
+      if (destination) destination.hidden = !transfer;
+      if (category) category.hidden = transfer || Boolean(split?.querySelector(".split-line"));
+      if (split) split.hidden = transfer;
+    }
+    if (event.target.matches("[data-filter-status], [data-filter-tag], [data-filter-sort]")) {
       const mount = document.getElementById("workspacePanel");
       if (event.target.matches("[data-filter-status]")) mount.dataset.status = event.target.value;
+      else if (event.target.matches("[data-filter-tag]")) mount.dataset.tag = event.target.value;
       else mount.dataset.sort = event.target.value;
       renderTransactions(mount);
     }
