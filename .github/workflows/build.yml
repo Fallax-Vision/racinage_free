@@ -18,4 +18,4 @@ jobs:
           dotnet add .deps package SQLitePCLRaw.lib.e_sqlite3 --version 2.1.6
       - name: Build portable executable
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racinage-free.ps1
+        run: powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\build\build-racinage-free.ps1 -Development
