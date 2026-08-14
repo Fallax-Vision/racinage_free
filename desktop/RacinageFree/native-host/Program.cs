@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -8,7 +9,9 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -146,8 +149,10 @@ namespace RacinageFreeDesktop {
     private readonly WebView2 browser = new WebView2();
     private readonly StatusDotControl statusDot = new StatusDotControl();
     private readonly System.Windows.Forms.Timer statusTimer = new System.Windows.Forms.Timer();
+    private readonly NotifyIcon calendarReminderIcon = new NotifyIcon();
     private Label statusText;
     private string lastError = "";
+    private DateTime nextCalendarReminderCheckUtc = DateTime.MinValue;
 
     internal RacinageWindow(LocalServer server, LocalStore store) {
       this.server = server;
@@ -162,7 +167,17 @@ namespace RacinageFreeDesktop {
       browser.Dock = DockStyle.Fill;
       Controls.Add(browser);
       browser.BringToFront();
-      FormClosing += delegate { statusTimer.Stop(); };
+      calendarReminderIcon.Icon = SystemIcons.Information;
+      calendarReminderIcon.Text = "Racinage Free Calendar";
+      calendarReminderIcon.Visible = true;
+      calendarReminderIcon.BalloonTipClicked += delegate {
+        if (browser.CoreWebView2 != null) browser.CoreWebView2.Navigate(server.BaseUrl + "/calendar");
+      };
+      FormClosing += delegate {
+        statusTimer.Stop();
+        calendarReminderIcon.Visible = false;
+        calendarReminderIcon.Dispose();
+      };
       Shown += async delegate { await StartBrowser(); };
       statusTimer.Interval = 4000;
       statusTimer.Tick += delegate { RefreshStatus(); };
@@ -360,6 +375,7 @@ namespace RacinageFreeDesktop {
     }
 
     private void RefreshStatus() {
+      CheckCalendarReminders();
       if (!server.IsRunning) {
         SetStatus(Color.FromArgb(185, 51, 51), "Offline");
         return;
@@ -369,6 +385,22 @@ namespace RacinageFreeDesktop {
         return;
       }
       SetStatus(Color.FromArgb(19, 151, 47), "Synced");
+    }
+
+    private void CheckCalendarReminders() {
+      if (DateTime.UtcNow < nextCalendarReminderCheckUtc) return;
+      nextCalendarReminderCheckUtc = DateTime.UtcNow.AddSeconds(30);
+      try {
+        List<Dictionary<string,string> > reminders = store.ClaimDueCalendarReminders(DateTime.Now);
+        if (reminders.Count == 0) return;
+        string title = reminders.Count == 1 ? reminders[0]["title"] : reminders.Count.ToString(CultureInfo.InvariantCulture) + " Calendar reminders";
+        string message = String.Join("\r\n", reminders.Take(4).Select(item => item["title"] + " - " + item["occurrence_at"]));
+        if (reminders.Count > 4) message += "\r\n+" + (reminders.Count - 4).ToString(CultureInfo.InvariantCulture) + " more";
+        if (message.Length > 240) message = message.Substring(0, 237) + "...";
+        calendarReminderIcon.ShowBalloonTip(8000, title, message, ToolTipIcon.Info);
+      } catch (Exception error) {
+        Program.Log("Calendar reminder check failed: " + error.Message);
+      }
     }
 
     private void SetStatus(Color color, string text) {
@@ -507,6 +539,7 @@ namespace RacinageFreeDesktop {
             connected.Render(context.Request.QueryString["conversation"])));
           return;
         }
+        if (path == "/calendar") { Calendar(context); return; }
         if (path == "/connected-messaging-api") {
           ConnectedMessagingApi(context);
           return;
@@ -693,6 +726,86 @@ namespace RacinageFreeDesktop {
         "<section class='panel wide'><div class='panelhead'><div><h2>Family records</h2><p>" + people.Count.ToString(CultureInfo.InvariantCulture) + " people saved locally.</p></div></div>" + shareButtons + rows.ToString() + "</section>" +
         UpgradeModal() + PortableAiShell("family");
       return Page("Family", body);
+    }
+
+    private void Calendar(HttpListenerContext context) {
+      if (!IsAuthenticated(context)) { Redirect(context, "/login"); return; }
+      string message = "";
+      if (context.Request.HttpMethod == "POST") {
+        Dictionary<string,string> form = ReadForm(context);
+        if (!CheckCsrf(form)) { WriteHtml(context, Page("Calendar", CalendarPage(context, "Your session expired. Please try again.")), 400); return; }
+        try {
+          string action = form.ContainsKey("action") ? form["action"] : "";
+          if (action == "save_calendar_item") { store.SaveCalendarItem(form); message = "Calendar item saved."; }
+          else if (action == "delete_calendar_item") { store.DeleteCalendarItem(form.ContainsKey("long_id") ? form["long_id"] : "", form.ContainsKey("revision") ? form["revision"] : "0"); message = "Calendar item deleted."; }
+          else if (action == "preview_ics") { store.PreviewCalendarIcs(form.ContainsKey("ics_text") ? form["ics_text"] : ""); message = "ICS preview is ready. Review it before importing."; }
+          else if (action == "import_ics") { int imported = store.ImportPendingCalendarIcs(); message = imported.ToString(CultureInfo.InvariantCulture) + " calendar items imported."; }
+          else if (action == "discard_ics") { store.DiscardPendingCalendarIcs(); message = "ICS preview discarded."; }
+          else if (action == "save_calendar_preferences") { store.SaveCalendarPreferences(form); message = "Calendar preferences saved."; }
+          else throw new InvalidDataException("Unknown Calendar action.");
+          string view = form.ContainsKey("return_view") ? SafeCalendarView(form["return_view"]) : "month";
+          string anchor = form.ContainsKey("return_anchor") && ValidDate(form["return_anchor"]) ? form["return_anchor"] : DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+          Redirect(context, "/calendar?view=" + Uri.EscapeDataString(view) + "&anchor=" + Uri.EscapeDataString(anchor) + "&message=" + Uri.EscapeDataString(message));
+          return;
+        } catch (Exception error) { message = error.Message; }
+      }
+      if (context.Request.QueryString["export"] == "ics") {
+        string ics = store.ExportCalendarIcs();byte[] bytes = Encoding.UTF8.GetBytes(ics);context.Response.StatusCode=200;context.Response.ContentType="text/calendar; charset=utf-8";context.Response.Headers["Content-Disposition"]="attachment; filename=\"racinage-free-calendar.ics\"";context.Response.Headers["Cache-Control"]="no-store";context.Response.ContentLength64=bytes.Length;context.Response.OutputStream.Write(bytes,0,bytes.Length);context.Response.Close();return;
+      }
+      if (message == "") message = context.Request.QueryString["message"] ?? "";
+      WriteHtml(context, Page("Calendar", CalendarPage(context, message)));
+    }
+
+    private static string SafeCalendarView(string value) { return new[]{"month","week","day","agenda","year"}.Contains(value) ? value : "month"; }
+    private static object[] CalendarJsonArray(Dictionary<string,object> values,string key) { object value;if(values==null||!values.TryGetValue(key,out value)||value==null)return new object[0];object[] array=value as object[];if(array!=null)return array;ArrayList list=value as ArrayList;return list==null?new object[0]:list.ToArray(); }
+    private static string SafeCalendarRecordId(string value) { if(String.IsNullOrEmpty(value)||value.Length>80)return "";foreach(char c in value)if(!Char.IsLetterOrDigit(c)&&c!='_'&&c!='-')return "";return value; }
+    private static bool ValidDate(string value) { DateTime parsed;return !String.IsNullOrEmpty(value)&&DateTime.TryParseExact(value,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out parsed); }
+
+    private string CalendarPage(HttpListenerContext context, string message) {
+      Dictionary<string,string> preferences = store.CalendarPreferences();
+      string view = SafeCalendarView(context.Request.QueryString["view"] ?? (preferences.ContainsKey("view_name") ? preferences["view_name"] : "month"));
+      DateTime anchor;string rawAnchor=context.Request.QueryString["anchor"]??(preferences.ContainsKey("anchor_date")?preferences["anchor_date"]:"");if(!DateTime.TryParseExact(rawAnchor,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out anchor))anchor=DateTime.Today;
+      store.RememberCalendarView(view,anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture));
+      DateTime start,end;
+      if(view=="day"){start=anchor.Date;end=start.AddDays(1);}else if(view=="week"){int offset=((int)anchor.DayOfWeek+6)%7;start=anchor.Date.AddDays(-offset);end=start.AddDays(7);}else if(view=="year"){start=new DateTime(anchor.Year,1,1);end=start.AddYears(1);}else if(view=="agenda"){start=anchor.Date;end=start.AddDays(90);}else{start=new DateTime(anchor.Year,anchor.Month,1);int offset=((int)start.DayOfWeek+6)%7;start=start.AddDays(-offset);end=start.AddDays(42);}
+      List<Dictionary<string,string> > entries=store.CalendarEntries(start,end);
+      Dictionary<string,object> filterSettings=new Dictionary<string,object>();try{filterSettings=json.DeserializeObject(preferences.ContainsKey("filters_json")?preferences["filters_json"]:"{}") as Dictionary<string,object>??new Dictionary<string,object>();}catch{}HashSet<string> selectedSources=new HashSet<string>(CalendarJsonArray(filterSettings,"sources").Select(value=>Convert.ToString(value,CultureInfo.InvariantCulture)),StringComparer.Ordinal),selectedKinds=new HashSet<string>(CalendarJsonArray(filterSettings,"kinds").Select(value=>Convert.ToString(value,CultureInfo.InvariantCulture)),StringComparer.Ordinal);if(selectedSources.Count>0)entries=entries.Where(item=>selectedSources.Contains(item.ContainsKey("source_id")?item["source_id"]:"")).ToList();if(selectedKinds.Count>0)entries=entries.Where(item=>selectedKinds.Contains(item.ContainsKey("item_kind")?item["item_kind"]:"")).ToList();
+      DateTime previous=view=="day"?anchor.AddDays(-1):view=="week"?anchor.AddDays(-7):view=="year"?anchor.AddYears(-1):anchor.AddMonths(-1);DateTime next=view=="day"?anchor.AddDays(1):view=="week"?anchor.AddDays(7):view=="year"?anchor.AddYears(1):anchor.AddMonths(1);
+      string label=view=="day"?anchor.ToString("dddd, dd MMMM yyyy",CultureInfo.CurrentCulture):view=="week"?start.ToString("dd MMM",CultureInfo.CurrentCulture)+" - "+end.AddDays(-1).ToString("dd MMM yyyy",CultureInfo.CurrentCulture):view=="year"?anchor.Year.ToString(CultureInfo.InvariantCulture):anchor.ToString("MMMM yyyy",CultureInfo.CurrentCulture);
+      string controls="<div class='calendar-controls'><div class='actions'><a class='button ghost' href='/calendar?view="+A(view)+"&anchor="+previous.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"' aria-label='Previous'>Previous</a><a class='button ghost' href='/calendar?view="+A(view)+"&anchor="+DateTime.Today.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'>Today</a><a class='button ghost' href='/calendar?view="+A(view)+"&anchor="+next.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"' aria-label='Next'>Next</a></div><form method='get' action='/calendar' class='calendar-jump'><input type='hidden' name='view' value='"+A(view)+"'><label>Jump to<input type='date' name='anchor' value='"+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"' onchange='this.form.submit()'></label></form></div>";
+      string tabs="<nav class='calendar-view-tabs' aria-label='Calendar views'>"+String.Join("",new[]{"month","week","day","agenda","year"}.Select(item=>"<a class='"+(view==item?"active":"")+"' href='/calendar?view="+item+"&anchor="+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'"+(view==item?" aria-current='page'":"")+">"+CultureInfo.InvariantCulture.TextInfo.ToTitleCase(item)+"</a>"))+"</nav>";
+      string[] sourceValues={"core.calendar","ics.import","plugin.finance-manager","plugin.kitchen-planner"},sourceLabels={"Calendar","ICS imports","Finance Manager","Kitchen Planner"},kindValues={"event","meeting","task","reminder","transaction","target","due","meal","restock","expiry"};StringBuilder filterChoices=new StringBuilder();for(int i=0;i<sourceValues.Length;i++)filterChoices.Append("<label><input type='checkbox' data-calendar-filter-source value='"+A(sourceValues[i])+"'"+(selectedSources.Count==0||selectedSources.Contains(sourceValues[i])?" checked":"")+"><span>"+H(sourceLabels[i])+"</span></label>");StringBuilder kindChoices=new StringBuilder();foreach(string kind in kindValues)kindChoices.Append("<label><input type='checkbox' data-calendar-filter-kind value='"+A(kind)+"'"+(selectedKinds.Count==0||selectedKinds.Contains(kind)?" checked":"")+"><span>"+H(CultureInfo.InvariantCulture.TextInfo.ToTitleCase(kind))+"</span></label>");string filterPanel="<details class='calendar-filter-panel'><summary>Filters <span>"+entries.Count.ToString(CultureInfo.InvariantCulture)+" visible</span></summary><form method='post' action='/calendar' data-calendar-filter-form>"+CsrfInput()+"<input type='hidden' name='action' value='save_calendar_preferences'><input type='hidden' name='return_view' value='"+A(view)+"'><input type='hidden' name='return_anchor' value='"+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><input type='hidden' name='view_name' value='"+A(view)+"'><input type='hidden' name='anchor_date' value='"+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><input type='hidden' name='filters_json' data-calendar-filter-json value='"+A(json.Serialize(filterSettings))+"'><input type='hidden' name='working_hours_json' value='"+A(preferences.ContainsKey("working_hours_json")?preferences["working_hours_json"]:"{}")+"'><fieldset><legend>Sources</legend>"+filterChoices+"</fieldset><fieldset><legend>Types</legend>"+kindChoices+"</fieldset><p role='status'>Changes save automatically.</p></form></details>";
+      string body="<section class='calendar-head'><div><p class='kicker'>Account-wide local calendar</p><h1>Calendar</h1><p>Local dates from Calendar, history, Finance Manager, Kitchen Planner, and future reviewed portable sources.</p></div><div class='actions'><a class='button ghost' href='/calendar?export=ics'>Export ICS</a><button class='button' type='button' data-calendar-open>Quick add</button></div></section>"+ErrorHtml(message)+tabs+controls+filterPanel+"<section class='calendar-title'><h2>"+H(label)+"</h2><span>"+entries.Count.ToString(CultureInfo.InvariantCulture)+" visible entries</span></section>"+RenderCalendarView(view,start,end,entries)+CalendarEditor(view,anchor,entries,context.Request.QueryString["edit"]??"")+CalendarIcsPanel()+PortableAiShell("calendar");
+      return body;
+    }
+
+    private string RenderCalendarView(string view, DateTime start, DateTime end, List<Dictionary<string,string> > entries) {
+      if(view=="agenda"||view=="day")return RenderCalendarAgenda(entries,view=="day"?"No items on this day.":"No upcoming items.");
+      if(view=="year"){
+        StringBuilder months=new StringBuilder("<div class='calendar-year'>");for(int month=1;month<=12;month++){DateTime first=new DateTime(start.Year,month,1),last=first.AddMonths(1);int count=entries.Count(item=>CalendarEntryDate(item)>=first&&CalendarEntryDate(item)<last);months.Append("<a href='/calendar?view=month&anchor="+first.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><strong>"+H(first.ToString("MMMM",CultureInfo.CurrentCulture))+"</strong><span>"+count.ToString(CultureInfo.InvariantCulture)+" items</span></a>");}return months.Append("</div>").ToString();
+      }
+      StringBuilder grid=new StringBuilder("<div class='calendar-grid "+(view=="week"?"is-week":"is-month")+"'>");DateTime cursor=start;while(cursor<end){List<Dictionary<string,string> > dayEntries=entries.Where(item=>CalendarEntryDate(item).Date==cursor.Date).Take(view=="month"?4:20).ToList();grid.Append("<article class='calendar-day"+(cursor.Date==DateTime.Today?" is-today":"")+"'><header><a href='/calendar?view=day&anchor="+cursor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><span>"+H(cursor.ToString("ddd",CultureInfo.CurrentCulture))+"</span><strong>"+cursor.Day.ToString(CultureInfo.InvariantCulture)+"</strong></a><button type='button' aria-label='Add on "+cursor.ToString("dd/MM/yyyy",CultureInfo.InvariantCulture)+"' onclick=\"calendarQuickDate('"+cursor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"')\">+</button></header><div>");foreach(Dictionary<string,string> item in dayEntries)grid.Append(CalendarEntryHtml(item));if(dayEntries.Count==0)grid.Append("<span class='calendar-empty-day'>No items</span>");grid.Append("</div></article>");cursor=cursor.AddDays(1);}return grid.Append("</div>").ToString();
+    }
+
+    private static DateTime CalendarEntryDate(Dictionary<string,string> item) { DateTime value;bool allDay=item.ContainsKey("all_day")&&item["all_day"]=="1";string raw=allDay?(item.ContainsKey("date_value")?item["date_value"]:""):(item.ContainsKey("start_utc")&&item["start_utc"]!=""?item["start_utc"]:(item.ContainsKey("date_value")?item["date_value"]:""));if(DateTime.TryParse(raw,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal,out value))return allDay?value.Date:value.ToLocalTime();return DateTime.MinValue; }
+
+    private static string CalendarEntryHtml(Dictionary<string,string> item) { string title=H(item.ContainsKey("title")?item["title"]:"Busy"),color=H(item.ContainsKey("color")?item["color"]:"#0f7370"),time=(item.ContainsKey("all_day")&&item["all_day"]=="1")?"All day":CalendarEntryDate(item).ToString("HH:mm",CultureInfo.CurrentCulture),source=item.ContainsKey("source_id")?item["source_id"]:"";string href=source=="core.calendar"?"/calendar?view=day&anchor="+CalendarEntryDate(item).ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"&edit="+A(item.ContainsKey("long_id")?item["long_id"]:""):source=="plugin.kitchen-planner"?"/plugin/kitchen-planner":source=="plugin.finance-manager"?"/plugin/finance-manager":"/calendar?view=day&anchor="+CalendarEntryDate(item).ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);return "<a class='calendar-entry' style='--entry-color:"+color+"' href='"+href+"'><span>"+H(time)+"</span><strong>"+title+"</strong></a>"; }
+
+    private string RenderCalendarAgenda(List<Dictionary<string,string> > entries,string empty) { if(entries.Count==0)return "<p class='calendar-empty'>"+H(empty)+"</p>";StringBuilder body=new StringBuilder("<div class='calendar-agenda'>");foreach(IGrouping<DateTime,Dictionary<string,string> > group in entries.OrderBy(CalendarEntryDate).GroupBy(item=>CalendarEntryDate(item).Date)){body.Append("<section><time>"+H(group.Key.ToString("dddd dd MMMM yyyy",CultureInfo.CurrentCulture))+"</time><div>");foreach(Dictionary<string,string> item in group)body.Append(CalendarEntryHtml(item));body.Append("</div></section>");}return body.Append("</div>").ToString(); }
+
+    private string CalendarEditor(string view,DateTime anchor,List<Dictionary<string,string> > entries,string requestedEdit) {
+      requestedEdit=SafeCalendarRecordId(requestedEdit);Dictionary<string,string> item=requestedEdit==""?null:entries.FirstOrDefault(row=>row.ContainsKey("long_id")&&row["long_id"]==requestedEdit&&row.ContainsKey("source_id")&&row["source_id"]=="core.calendar");bool editing=item!=null;string editId=editing?item["long_id"]:"",title=editing&&item.ContainsKey("title")?item["title"]:"",kind=editing&&item.ContainsKey("item_kind")?item["item_kind"]:"event",date=editing?CalendarEntryDate(item).ToString("yyyy-MM-dd",CultureInfo.InvariantCulture):anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),start="",end="",frequency="",reminder="",notes=editing&&item.ContainsKey("notes")?item["notes"]:"",revision=editing&&item.ContainsKey("revision")?item["revision"]:"0";
+      if(editing&&item.ContainsKey("all_day")&&item["all_day"]!="1"){DateTime startDate;if(item.ContainsKey("start_utc")&&DateTime.TryParse(item["start_utc"],CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal,out startDate))start=startDate.ToLocalTime().ToString("HH:mm",CultureInfo.InvariantCulture);DateTime endDate;if(item.ContainsKey("end_utc")&&DateTime.TryParse(item["end_utc"],CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal,out endDate))end=endDate.ToLocalTime().ToString("HH:mm",CultureInfo.InvariantCulture);}
+      if(editing&&item.ContainsKey("recurrence_json")&&item["recurrence_json"]!=""){try{Dictionary<string,object> rule=json.DeserializeObject(item["recurrence_json"]) as Dictionary<string,object>;object value;if(rule!=null&&rule.TryGetValue("frequency",out value)&&value!=null)frequency=Convert.ToString(value,CultureInfo.InvariantCulture);}catch{}}
+      if(editing&&item.ContainsKey("reminder_json")&&item["reminder_json"]!=""){try{Dictionary<string,object> rule=json.DeserializeObject(item["reminder_json"]) as Dictionary<string,object>;if(rule!=null)reminder=Convert.ToString(rule.ContainsKey("minutes_before")?rule["minutes_before"]:"",CultureInfo.InvariantCulture);}catch{}}
+      Func<string,string,string> option=(value,label)=>"<option value='"+A(value)+"'"+(value==kind?" selected":"")+">"+H(label)+"</option>";Func<string,string,string> recurrenceOption=(value,label)=>"<option value='"+A(value)+"'"+(value==frequency?" selected":"")+">"+H(label)+"</option>";Func<string,string,string> reminderOption=(value,label)=>"<option value='"+A(value)+"'"+(value==reminder?" selected":"")+">"+H(label)+"</option>";
+      string modal="<div id='calendarNew' class='modal' role='dialog' aria-modal='true' aria-labelledby='calendarEditorTitle'"+(editing?"":" hidden")+"><div class='modalbox calendar-editor'><div class='panelhead'><div><p class='kicker'>Calendar item</p><h2 id='calendarEditorTitle'>"+(editing?"Edit local item":"Schedule locally")+"</h2></div><button type='button' class='textbtn' data-calendar-close>Close</button></div><form method='post' action='/calendar'>"+CsrfInput()+"<input type='hidden' name='action' value='save_calendar_item'><input type='hidden' name='long_id' value='"+A(editId)+"'><input type='hidden' name='revision' value='"+A(revision)+"'><input type='hidden' name='return_view' value='"+A(view)+"'><input type='hidden' name='return_anchor' value='"+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><label>Title<input name='title' maxlength='190' value='"+A(title)+"' required autofocus></label><label>Kind<select name='item_kind'>"+option("event","Event")+option("meeting","Meeting")+option("task","Task")+option("reminder","Reminder")+"</select></label><label>Date<input id='calendarQuickDate' type='date' name='date_value' value='"+A(date)+"' required></label><div class='calendar-editor-row'><label>Start time<input type='time' name='start_time' value='"+A(start)+"'></label><label>End time<input type='time' name='end_time' value='"+A(end)+"'></label></div><label>Repeat<select name='frequency'>"+recurrenceOption("","Does not repeat")+recurrenceOption("daily","Daily")+recurrenceOption("weekly","Weekly")+recurrenceOption("monthly","Monthly")+recurrenceOption("yearly","Yearly")+"</select></label><label>Reminder<select name='reminder_minutes'>"+reminderOption("","None")+reminderOption("10","10 minutes before")+reminderOption("60","1 hour before")+reminderOption("1440","1 day before")+"</select></label><label>Notes<textarea name='notes' maxlength='2000' rows='3'>"+H(notes)+"</textarea></label><button class='button'>"+(editing?"Save changes":"Save item")+"</button></form>";
+      if(editing)modal+="<form method='post' action='/calendar' onsubmit=\"return confirm('Delete this local calendar item?')\">"+CsrfInput()+"<input type='hidden' name='action' value='delete_calendar_item'><input type='hidden' name='long_id' value='"+A(editId)+"'><input type='hidden' name='revision' value='"+A(revision)+"'><input type='hidden' name='return_view' value='"+A(view)+"'><input type='hidden' name='return_anchor' value='"+anchor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"'><button class='button danger'>Delete item</button></form>";
+      return modal+"</div></div>";
+    }
+
+    private string CalendarIcsPanel() {
+      Dictionary<string,object> preview=store.PendingCalendarIcs();string previewHtml="";if(preview.Count>0)previewHtml="<div class='calendar-ics-preview'><strong>"+H(Convert.ToString(preview["count"],CultureInfo.InvariantCulture))+" items ready</strong><span>"+H(Convert.ToString(preview["duplicates"],CultureInfo.InvariantCulture))+" possible duplicates</span><form method='post'>"+CsrfInput()+"<input type='hidden' name='action' value='import_ics'><button class='button'>Confirm import</button></form><form method='post'>"+CsrfInput()+"<input type='hidden' name='action' value='discard_ics'><button class='button ghost'>Discard</button></form></div>";return "<section class='panel wide calendar-ics'><div class='panelhead'><div><h2>ICS import</h2><p>Preview a one-time ICS import. Duplicate fingerprints are skipped and unknown timezones remain date-safe.</p></div></div>"+previewHtml+"<form method='post' action='/calendar'>"+CsrfInput()+"<input type='hidden' name='action' value='preview_ics'><label>Paste ICS content<textarea name='ics_text' rows='6' maxlength='200000' required></textarea></label><button class='button ghost'>Preview ICS</button></form></section>";
     }
 
     private void Manage(HttpListenerContext context, string path) {
@@ -949,6 +1062,8 @@ namespace RacinageFreeDesktop {
       string entrypoint = store.PluginEntrypoint(slug);
       if (entrypoint == "" || !File.Exists(entrypoint)) { WriteHtml(context, Page("Plugin unavailable", "<section class='panel'><h1>Plugin unavailable</h1><p>This local plugin is missing or disabled.</p><a class='button' href='/manage/plugins'>Back to plugins</a></section>"), 404); return; }
       string source = File.ReadAllText(entrypoint, Encoding.UTF8);
+      string pluginCsp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:\">";
+      source = source.Replace("<head>", "<head>" + pluginCsp);
       string root = Path.GetDirectoryName(entrypoint);
       string cssPath = Path.Combine(root, "app.css"), jsPath = Path.Combine(root, "app.js");
       if (File.Exists(cssPath)) source = source.Replace("<link rel=\"stylesheet\" href=\"app.css\">", "<style>" + File.ReadAllText(cssPath, Encoding.UTF8) + "</style>");
@@ -956,7 +1071,7 @@ namespace RacinageFreeDesktop {
       string bridgeToken = RandomToken(32);
       source = source.Replace("{{FINANCE_BRIDGE_TOKEN}}", bridgeToken).Replace("{{RACINAGE_PLUGIN_BRIDGE_TOKEN}}",bridgeToken);
       string pluginName=store.PluginName(slug),pluginCopy=String.Equals(slug,"namegen",StringComparison.OrdinalIgnoreCase)?"Private name-finding records remain available without internet access.":"Private local plugin records remain available without internet access.";
-      string body = "<section class='manage-head plugin-shell-head'><div><p class='kicker'>Local plugin</p><h1>"+H(pluginName)+"</h1><p>"+H(pluginCopy)+"</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' data-plugin-slug='" + A(slug) + "' data-bridge-token='" + A(bridgeToken) + "' sandbox='allow-scripts allow-forms allow-downloads allow-modals' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
+      string body = "<section class='manage-head plugin-shell-head'><div><p class='kicker'>Local plugin</p><h1>"+H(pluginName)+"</h1><p>"+H(pluginCopy)+"</p></div><a class='button ghost' href='/manage/plugins'>Back to plugins</a></section><iframe class='plugin-frame' data-plugin-slug='" + A(slug) + "' data-bridge-token='" + A(bridgeToken) + "' sandbox='allow-scripts allow-downloads allow-modals' referrerpolicy='no-referrer' srcdoc='" + A(source) + "'></iframe>";
       WriteHtml(context, Page(slug, body));
     }
 
@@ -969,7 +1084,15 @@ namespace RacinageFreeDesktop {
         Dictionary<string, object> request = json.Deserialize<Dictionary<string, object> >(body);
         string action = request != null && request.ContainsKey("action") ? Convert.ToString(request["action"], CultureInfo.InvariantCulture) : "";
         Dictionary<string, object> payload = request != null && request.ContainsKey("payload") ? request["payload"] as Dictionary<string, object> : null;
-        object result = store.LocalPluginAction(slug, action, payload ?? new Dictionary<string, object>());
+        Dictionary<string, object> safePayload = payload ?? new Dictionary<string, object>();
+        object result;
+        if (slug == "kitchen-planner" && action == "local_ai_status") {
+          if (!store.PluginActionAllowed(slug, action)) throw new InvalidOperationException("This local plugin operation is not authorized.");
+          result = ai.Status();
+        } else if (slug == "kitchen-planner" && action == "local_ai_extract") {
+          if (!store.PluginActionAllowed(slug, action)) throw new InvalidOperationException("This local plugin operation is not authorized.");
+          result = ai.ExtractKitchenRecipes(safePayload);
+        } else result = store.LocalPluginAction(slug, action, safePayload);
         WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", true }, { "result", result } }), 200);
       } catch (Exception error) {
         Program.Log("Local plugin bridge error: " + error.Message);
@@ -1022,9 +1145,9 @@ namespace RacinageFreeDesktop {
     private string Page(string title, string body) {
       string assetVersion = Uri.EscapeDataString(PortablePaths.Version);
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css?v=" + assetVersion + "'><style>" + Css() + "</style></head><body>" +
-        "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
-        "<main>" + body + "</main><script>" + PluginLifecycleJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js?v=" + assetVersion + "'></script></body></html>";
+        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css?v=" + assetVersion + "'><style>" + Css() + CalendarCss() + "</style></head><body>" +
+        "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/calendar'>Calendar</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
+        "<main>" + body + "</main><script>" + PluginLifecycleJs() + CalendarJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js?v=" + assetVersion + "'></script></body></html>";
     }
 
     private static string ErrorHtml(string error) {
@@ -1033,6 +1156,21 @@ namespace RacinageFreeDesktop {
 
     private static string UpgradeModal() {
       return "<div id='upgradeModal' class='modal' hidden><div class='modalbox'><h2>Upgrade required</h2><p>You cannot share <span id='upgradeFeature'>this record</span> while using the local Lite Free plan.</p><div class='actions'><a class='button' href='" + PortablePaths.PricingUrl + "'>Upgrade</a><button type='button' class='button ghost' onclick='hideUpgrade()'>Close</button></div></div></div>";
+    }
+
+    private static string CalendarCss() {
+      return @"
+select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfdfd;color:var(--text)}
+.calendar-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px}.calendar-head h1{margin:5px 0 8px;font-size:42px;color:var(--brand)}.calendar-head p{margin:0;color:var(--muted)}.calendar-view-tabs{display:flex;gap:5px;margin:22px 0 12px;padding:5px;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:auto}.calendar-view-tabs a{min-height:42px;display:flex;align-items:center;padding:0 14px;border-radius:7px;color:var(--muted);font-weight:700}.calendar-view-tabs a.active{background:var(--brand);color:#fff}.calendar-controls,.calendar-title{display:flex;justify-content:space-between;align-items:center;gap:16px}.calendar-controls .actions{margin:0}.calendar-jump{width:180px}.calendar-filter-panel{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:#fff}.calendar-filter-panel summary{display:flex;justify-content:space-between;align-items:center;min-height:44px;padding:10px 14px;cursor:pointer;font-weight:700}.calendar-filter-panel summary span,.calendar-filter-panel form>p{color:var(--muted);font-size:12px}.calendar-filter-panel form{display:grid;grid-template-columns:1fr 1.5fr;gap:14px;padding:14px;border-top:1px solid var(--line)}.calendar-filter-panel fieldset{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;border:0}.calendar-filter-panel legend{width:100%;margin-bottom:4px;font-size:12px;font-weight:700}.calendar-filter-panel label{display:flex;align-items:center;gap:6px;min-height:38px;padding:6px 9px;border:1px solid var(--line);border-radius:8px}.calendar-filter-panel form>p{grid-column:1/-1;margin:0}.calendar-title{margin:22px 0 10px}.calendar-title h2{margin:0;color:var(--brand)}.calendar-title span{font-size:13px;color:var(--muted)}
+.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}.calendar-day{min-width:0;min-height:142px;padding:8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.calendar-day:nth-child(7n){border-right:0}.calendar-day header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}.calendar-day header a{display:flex;gap:6px;align-items:center;min-height:36px;color:var(--muted);font-size:12px}.calendar-day header strong{font-size:15px;color:var(--brand)}.calendar-day header button{width:36px;height:36px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--brand);cursor:pointer}.calendar-day.is-today{background:#f4fbf8}.calendar-day.is-today header strong{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff}
+.calendar-entry{display:grid;gap:2px;min-height:34px;margin:4px 0;padding:5px 7px;border-left:3px solid var(--entry-color);border-radius:5px;background:#f5f9fa;overflow:hidden}.calendar-entry span{font-size:10px;color:var(--muted)}.calendar-entry strong{font-size:11px;color:var(--brand);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.calendar-empty-day{font-size:11px;color:#a0abad}.calendar-year{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.calendar-year a{display:grid;gap:8px;min-height:105px;padding:18px;border:1px solid var(--line);border-radius:10px;background:#fff}.calendar-year strong{color:var(--brand)}.calendar-year span{color:var(--muted);font-size:13px}
+.calendar-agenda{display:grid;gap:14px}.calendar-agenda section{display:grid;grid-template-columns:210px minmax(0,1fr);gap:16px;padding:14px;border:1px solid var(--line);border-radius:10px;background:#fff}.calendar-agenda time{font-weight:700;color:var(--brand)}.calendar-empty{padding:40px;text-align:center;border:1px dashed var(--line);border-radius:12px;color:var(--muted)}.calendar-editor{width:min(620px,100%);max-height:calc(100vh - 48px);overflow:auto}.calendar-editor-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.calendar-ics{margin-top:22px}.calendar-ics-preview{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--pale)}.calendar-ics-preview form{display:block}.calendar-ics-preview span{color:var(--muted);font-size:13px}
+@media(max-width:760px){.calendar-head,.calendar-controls{display:block}.calendar-head .actions{margin-top:12px}.calendar-jump{width:100%;margin-top:12px}.calendar-filter-panel form{grid-template-columns:1fr}.calendar-grid{display:block}.calendar-day{min-height:92px;border-right:0}.calendar-year{grid-template-columns:repeat(2,minmax(0,1fr))}.calendar-agenda section{grid-template-columns:1fr}.calendar-editor-row{grid-template-columns:1fr}}
+";
+    }
+
+    private static string CalendarJs() {
+      return "var calendarReturnFocus=null,calendarFilterTimer=0;function calendarOpen(value){var modal=document.getElementById('calendarNew'),input=document.getElementById('calendarQuickDate');calendarReturnFocus=document.activeElement;if(value&&input)input.value=value;if(!modal)return;modal.hidden=false;var first=modal.querySelector('[name=title],input:not([type=hidden]),select,textarea,button');if(first)first.focus();}function calendarClose(){var modal=document.getElementById('calendarNew');if(modal)modal.hidden=true;if(calendarReturnFocus&&calendarReturnFocus.focus)calendarReturnFocus.focus();}function calendarQuickDate(value){calendarOpen(value);}document.addEventListener('click',function(event){if(event.target.closest('[data-calendar-open]'))calendarOpen('');if(event.target.closest('[data-calendar-close]'))calendarClose();});document.addEventListener('change',function(event){var form=event.target.closest('[data-calendar-filter-form]');if(!form)return;clearTimeout(calendarFilterTimer);calendarFilterTimer=setTimeout(function(){var sources=Array.prototype.map.call(form.querySelectorAll('[data-calendar-filter-source]:checked'),function(field){return field.value;}),kinds=Array.prototype.map.call(form.querySelectorAll('[data-calendar-filter-kind]:checked'),function(field){return field.value;});form.querySelector('[data-calendar-filter-json]').value=JSON.stringify({sources:sources.length?sources:['__none__'],kinds:kinds.length?kinds:['__none__']});if(form.requestSubmit)form.requestSubmit();else form.submit();},250);});document.addEventListener('keydown',function(event){var modal=document.getElementById('calendarNew');if(!modal||modal.hidden)return;if(event.key==='Escape'){event.preventDefault();calendarClose();return;}if(event.key!=='Tab')return;var focusable=Array.prototype.slice.call(modal.querySelectorAll('button:not([disabled]),input:not([type=hidden]):not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]')),first=focusable[0],last=focusable[focusable.length-1];if(!first)return;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}});";
     }
 
     private static string Css() {
@@ -1300,6 +1438,13 @@ namespace RacinageFreeDesktop {
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_attachments (slug TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL,transaction_long_id TEXT NOT NULL,relative_path TEXT NOT NULL,original_name TEXT NOT NULL,mime_type TEXT NOT NULL,file_size INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,long_id))");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_attachments ON local_plugin_attachments(slug,transaction_long_id,status)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_settings (slug TEXT NOT NULL,setting_key TEXT NOT NULL,setting_value TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,setting_key))");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_items (long_id TEXT PRIMARY KEY,source_id TEXT NOT NULL DEFAULT 'core.calendar',source_opaque_id TEXT NOT NULL DEFAULT '',item_kind TEXT NOT NULL,title TEXT NOT NULL,start_utc TEXT NOT NULL DEFAULT '',end_utc TEXT NOT NULL DEFAULT '',date_value TEXT NOT NULL DEFAULT '',timezone TEXT NOT NULL DEFAULT 'UTC',all_day INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'planned',recurrence_json TEXT NOT NULL DEFAULT '',reminder_json TEXT NOT NULL DEFAULT '',color TEXT NOT NULL DEFAULT '#0f7370',notes TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)");
+        db.Exec("CREATE INDEX IF NOT EXISTS idx_local_calendar_range ON local_calendar_items(status,date_value,start_utc)");
+        db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_local_calendar_source ON local_calendar_items(source_id,source_opaque_id) WHERE source_opaque_id<>''");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_exceptions (item_long_id TEXT NOT NULL,occurrence_key TEXT NOT NULL,action TEXT NOT NULL,override_json TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,PRIMARY KEY(item_long_id,occurrence_key))");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_preferences (id INTEGER PRIMARY KEY CHECK(id=1),view_name TEXT NOT NULL DEFAULT 'month',anchor_date TEXT NOT NULL DEFAULT '',filters_json TEXT NOT NULL DEFAULT '{}',working_hours_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_ics_feeds (long_id TEXT PRIMARY KEY,source_name TEXT NOT NULL,source_fingerprint TEXT NOT NULL,imported_at TEXT NOT NULL)");
+        db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_reminder_claims (item_long_id TEXT NOT NULL,occurrence_key TEXT NOT NULL,reminder_offset_minutes INTEGER NOT NULL,delivered_at TEXT NOT NULL,PRIMARY KEY(item_long_id,occurrence_key,reminder_offset_minutes))");
         db.Exec("CREATE TABLE IF NOT EXISTS local_ai_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT,long_id TEXT NOT NULL UNIQUE,title_ciphertext TEXT NOT NULL,title_key_version INTEGER NOT NULL DEFAULT 1,is_pinned INTEGER NOT NULL DEFAULT 0,is_archived INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT NULL)");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_conversations_state ON local_ai_conversations(is_archived,is_pinned,updated_at)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_ai_messages (id INTEGER PRIMARY KEY AUTOINCREMENT,conversation_id INTEGER NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),content_ciphertext TEXT NOT NULL,content_key_version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,deleted_at TEXT NULL,FOREIGN KEY(conversation_id) REFERENCES local_ai_conversations(id) ON DELETE CASCADE)");
@@ -1315,6 +1460,145 @@ namespace RacinageFreeDesktop {
       ProtectDatabaseFile();
       GetOrCreateProtectedToken("device.token");
     }
+
+    internal Dictionary<string,string> CalendarPreferences() {
+      using(SqliteDb db=Open()) {
+        Dictionary<string,string> row=db.QueryOne("SELECT view_name,anchor_date,filters_json,working_hours_json FROM local_calendar_preferences WHERE id=1 LIMIT 1");
+        if(row!=null)return row;
+        return new Dictionary<string,string>{{"view_name","month"},{"anchor_date",DateTime.Today.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)},{"filters_json","{}"},{"working_hours_json","{}"}};
+      }
+    }
+
+    internal void RememberCalendarView(string view,string anchor) {
+      if(!new[]{"month","week","day","agenda","year"}.Contains(view)||!ValidDate(anchor))return;
+      using(SqliteDb db=Open())db.Execute("INSERT INTO local_calendar_preferences(id,view_name,anchor_date,filters_json,working_hours_json,updated_at)VALUES(1,?,?,'{}','{}',?) ON CONFLICT(id) DO UPDATE SET view_name=excluded.view_name,anchor_date=excluded.anchor_date,updated_at=excluded.updated_at",view,anchor,Now());
+    }
+
+    internal void SaveCalendarPreferences(Dictionary<string,string> form) {
+      string view=form.ContainsKey("view_name")?form["view_name"]:"month",anchor=form.ContainsKey("anchor_date")?form["anchor_date"]:DateTime.Today.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
+      if(!new[]{"month","week","day","agenda","year"}.Contains(view)||!ValidDate(anchor))throw new InvalidDataException("Choose valid Calendar preferences.");
+      string filters=form.ContainsKey("filters_json")?form["filters_json"]:"{}",hours=form.ContainsKey("working_hours_json")?form["working_hours_json"]:"{}";
+      if(filters.Length>20000||hours.Length>5000)throw new InvalidDataException("The Calendar preference is too large.");
+      try{json.DeserializeObject(filters);json.DeserializeObject(hours);}catch{throw new InvalidDataException("The Calendar preference format is invalid.");}
+      using(SqliteDb db=Open())db.Execute("INSERT INTO local_calendar_preferences(id,view_name,anchor_date,filters_json,working_hours_json,updated_at)VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET view_name=excluded.view_name,anchor_date=excluded.anchor_date,filters_json=excluded.filters_json,working_hours_json=excluded.working_hours_json,updated_at=excluded.updated_at",view,anchor,filters,hours,Now());
+      ProtectDatabaseFile();
+    }
+
+    internal void SaveCalendarItem(Dictionary<string,string> form) {
+      string longId=SafeLongId(form.ContainsKey("long_id")?form["long_id"]:""),title=(form.ContainsKey("title")?form["title"]:"").Trim(),kind=(form.ContainsKey("item_kind")?form["item_kind"]:"event").Trim(),date=form.ContainsKey("date_value")?form["date_value"]:"",start=form.ContainsKey("start_time")?form["start_time"]:"",end=form.ContainsKey("end_time")?form["end_time"]:"",frequency=form.ContainsKey("frequency")?form["frequency"]:"",reminder=form.ContainsKey("reminder_minutes")?form["reminder_minutes"]:"",notes=(form.ContainsKey("notes")?form["notes"]:"").Trim();
+      if(title==""||title.Length>190)throw new InvalidDataException("Enter a Calendar title of 190 characters or fewer.");
+      if(!new[]{"event","meeting","task","reminder"}.Contains(kind)||!ValidDate(date))throw new InvalidDataException("Choose a valid Calendar kind and date.");
+      TimeSpan startTime=TimeSpan.Zero,endTime=TimeSpan.Zero;if(start!=""&&!TimeSpan.TryParseExact(start,"hh\\:mm",CultureInfo.InvariantCulture,out startTime))throw new InvalidDataException("Choose a valid start time.");if(end!=""&&!TimeSpan.TryParseExact(end,"hh\\:mm",CultureInfo.InvariantCulture,out endTime))throw new InvalidDataException("Choose a valid end time.");
+      if(!new[]{"","daily","weekly","monthly","yearly"}.Contains(frequency))throw new InvalidDataException("Choose a supported recurrence.");int reminderMinutes;if(reminder!=""&&(!Int32.TryParse(reminder,out reminderMinutes)||!new[]{0,10,60,1440}.Contains(reminderMinutes)))throw new InvalidDataException("Choose a supported reminder.");
+      if(notes.Length>2000)throw new InvalidDataException("Calendar notes must be 2,000 characters or fewer.");
+      DateTime dateOnly=DateTime.ParseExact(date,"yyyy-MM-dd",CultureInfo.InvariantCulture),startUtc=DateTime.MinValue,endUtc=DateTime.MinValue;bool allDay=start=="";
+      if(!allDay){startUtc=DateTime.SpecifyKind(dateOnly.Add(startTime),DateTimeKind.Local).ToUniversalTime();if(end!=""){endUtc=DateTime.SpecifyKind(dateOnly.Add(endTime),DateTimeKind.Local).ToUniversalTime();if(endUtc<startUtc)throw new InvalidDataException("The end time cannot be before the start time.");}}
+      string recurrence=frequency==""?"":json.Serialize(new Dictionary<string,object>{{"frequency",frequency},{"interval",1}}),reminderJson=reminder==""?"":json.Serialize(new Dictionary<string,object>{{"minutes_before",Convert.ToInt32(reminder,CultureInfo.InvariantCulture)}}),now=Now();
+      using(SqliteDb db=Open()){
+        if(longId==""){longId=NewLongId("calendar_items");db.Execute("INSERT INTO local_calendar_items(long_id,source_id,source_opaque_id,item_kind,title,start_utc,end_utc,date_value,timezone,all_day,status,recurrence_json,reminder_json,color,notes,revision,created_at,updated_at)VALUES(?,'core.calendar','',?,?,?,?,?,?,?,'planned',?,?,'#0f7370',?,1,?,?)",longId,kind,title,startUtc==DateTime.MinValue?"":startUtc.ToString("o",CultureInfo.InvariantCulture),endUtc==DateTime.MinValue?"":endUtc.ToString("o",CultureInfo.InvariantCulture),date,TimeZoneInfo.Local.Id,allDay?1:0,recurrence,reminderJson,notes,now,now);}
+        else {int revision=form.ContainsKey("revision")?ToInt(form["revision"]):0;Dictionary<string,string> current=db.QueryOne("SELECT revision FROM local_calendar_items WHERE long_id=? AND source_id='core.calendar' AND status!='deleted' LIMIT 1",longId);if(current==null)throw new InvalidDataException("The Calendar item is unavailable.");if(revision>0&&revision!=ToInt(current["revision"]))throw new InvalidOperationException("This Calendar item changed in another window. Reopen it and try again.");db.Execute("UPDATE local_calendar_items SET item_kind=?,title=?,start_utc=?,end_utc=?,date_value=?,timezone=?,all_day=?,recurrence_json=?,reminder_json=?,notes=?,revision=revision+1,updated_at=? WHERE long_id=? AND source_id='core.calendar'",kind,title,startUtc==DateTime.MinValue?"":startUtc.ToString("o",CultureInfo.InvariantCulture),endUtc==DateTime.MinValue?"":endUtc.ToString("o",CultureInfo.InvariantCulture),date,TimeZoneInfo.Local.Id,allDay?1:0,recurrence,reminderJson,notes,now,longId);}
+      }
+      ProtectDatabaseFile();
+    }
+
+    internal void DeleteCalendarItem(string longId,string revisionValue) {
+      longId=SafeLongId(longId);int revision=ToInt(revisionValue);if(longId=="")throw new InvalidDataException("The Calendar item is unavailable.");
+      using(SqliteDb db=Open()){Dictionary<string,string> current=db.QueryOne("SELECT revision FROM local_calendar_items WHERE long_id=? AND source_id='core.calendar' AND status!='deleted' LIMIT 1",longId);if(current==null)throw new InvalidDataException("The Calendar item is unavailable.");if(revision>0&&revision!=ToInt(current["revision"]))throw new InvalidOperationException("This Calendar item changed in another window. Reopen it and try again.");db.Execute("UPDATE local_calendar_items SET status='deleted',revision=revision+1,updated_at=? WHERE long_id=?",Now(),longId);}
+      ProtectDatabaseFile();
+    }
+
+    internal List<Dictionary<string,string> > CalendarEntries(DateTime start,DateTime end) {
+      List<Dictionary<string,string> > result=new List<Dictionary<string,string> >();
+      using(SqliteDb db=Open()){
+        Dictionary<string,HashSet<string> > skipped=new Dictionary<string,HashSet<string> >();foreach(Dictionary<string,string> exception in db.Query("SELECT item_long_id,occurrence_key FROM local_calendar_exceptions WHERE action='skip'")){if(!skipped.ContainsKey(exception["item_long_id"]))skipped[exception["item_long_id"]]=new HashSet<string>();skipped[exception["item_long_id"]].Add(exception["occurrence_key"]);}
+        foreach(Dictionary<string,string> row in db.Query("SELECT long_id,source_id,source_opaque_id,item_kind,title,start_utc,end_utc,date_value,timezone,all_day,status,recurrence_json,reminder_json,color,notes,revision FROM local_calendar_items WHERE status!='deleted' ORDER BY date_value,start_utc LIMIT 5000"))ExpandCalendarRow(row,start,end,skipped.ContainsKey(row["long_id"])?skipped[row["long_id"]]:new HashSet<string>(),result);
+        foreach(Dictionary<string,string> row in db.Query("SELECT slug,record_type,long_id,workspace_long_id,data_json,version FROM local_plugin_records WHERE slug IN('finance-manager','kitchen-planner') AND status='active' ORDER BY updated_at DESC LIMIT 5000"))ProjectPortableRecord(row,start,end,result);
+      }
+      return result.Where(item=>CalendarRecordDate(item)>=start&&CalendarRecordDate(item)<end).OrderBy(CalendarRecordDate).ThenBy(item=>item.ContainsKey("title")?item["title"]:"").Take(5000).ToList();
+    }
+
+    internal List<Dictionary<string,string> > ClaimDueCalendarReminders(DateTime localNow) {
+      DateTime windowStart=localNow.AddDays(-1),windowEnd=localNow.AddDays(2);List<Dictionary<string,string> > claimed=new List<Dictionary<string,string> >();
+      foreach(Dictionary<string,string> item in CalendarEntries(windowStart,windowEnd)){
+        if(!item.ContainsKey("source_id")||item["source_id"]!="core.calendar"||!item.ContainsKey("reminder_json")||item["reminder_json"]=="")continue;
+        int offset;try{Dictionary<string,object> reminder=json.DeserializeObject(item["reminder_json"]) as Dictionary<string,object>;offset=reminder==null?Int32.MinValue:ToInt(reminder.ContainsKey("minutes_before")?reminder["minutes_before"]:null);}catch{continue;}if(!new[]{0,10,60,1440}.Contains(offset))continue;
+        DateTime occurrence=CalendarRecordDate(item);if(occurrence==DateTime.MinValue)continue;if(item.ContainsKey("all_day")&&item["all_day"]=="1")occurrence=occurrence.Date.AddHours(9);
+        DateTime due=occurrence.AddMinutes(-offset);if(localNow<due||localNow>due.AddMinutes(10))continue;
+        string longId=item.ContainsKey("long_id")?SafeLongId(item["long_id"]):"",occurrenceKey=item.ContainsKey("recurrence_reference")&&item["recurrence_reference"]!=""?item["recurrence_reference"]:longId+":"+occurrence.ToString("yyyy-MM-ddTHH:mm",CultureInfo.InvariantCulture);if(longId=="")continue;
+        using(SqliteDb db=Open())if(db.Execute("INSERT OR IGNORE INTO local_calendar_reminder_claims(item_long_id,occurrence_key,reminder_offset_minutes,delivered_at)VALUES(?,?,?,?)",longId,occurrenceKey,offset,Now())>0)claimed.Add(new Dictionary<string,string>{{"title",item.ContainsKey("title")?item["title"]:"Calendar reminder"},{"occurrence_at",occurrence.ToString("dd/MM/yyyy HH:mm",CultureInfo.CurrentCulture)},{"long_id",longId}});
+      }
+      if(claimed.Count>0)ProtectDatabaseFile();return claimed;
+    }
+
+    private void ExpandCalendarRow(Dictionary<string,string> row,DateTime rangeStart,DateTime rangeEnd,HashSet<string> skipped,List<Dictionary<string,string> > result) {
+      DateTime baseDate=CalendarRecordDate(row);if(baseDate==DateTime.MinValue)return;string frequency="";
+      if(row.ContainsKey("recurrence_json")&&row["recurrence_json"]!=""){try{Dictionary<string,object> recurrence=json.DeserializeObject(row["recurrence_json"]) as Dictionary<string,object>;if(recurrence!=null)frequency=GetString(recurrence,"frequency");}catch{}}
+      if(frequency==""){if(baseDate>=rangeStart&&baseDate<rangeEnd&&!skipped.Contains(baseDate.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)))result.Add(new Dictionary<string,string>(row,StringComparer.OrdinalIgnoreCase));return;}
+      DateTime cursor=baseDate;int guard=0;while(cursor<rangeStart&&guard++<5000)cursor=NextCalendarOccurrence(cursor,frequency);while(cursor<rangeEnd&&guard++<10000){string key=cursor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);if(!skipped.Contains(key)){Dictionary<string,string> occurrence=new Dictionary<string,string>(row,StringComparer.OrdinalIgnoreCase);occurrence["recurrence_reference"]=row["long_id"]+":"+key;if(row["all_day"]=="1")occurrence["date_value"]=key;else{DateTime startUtc;DateTime.TryParse(row["start_utc"],CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out startUtc);DateTime endUtc;DateTime.TryParse(row["end_utc"],CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out endUtc);TimeSpan duration=endUtc>startUtc?endUtc-startUtc:TimeSpan.Zero;DateTime occurrenceUtc=DateTime.SpecifyKind(cursor,DateTimeKind.Local).ToUniversalTime();occurrence["start_utc"]=occurrenceUtc.ToString("o",CultureInfo.InvariantCulture);occurrence["end_utc"]=duration>TimeSpan.Zero?occurrenceUtc.Add(duration).ToString("o",CultureInfo.InvariantCulture):"";occurrence["date_value"]=cursor.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);}result.Add(occurrence);}cursor=NextCalendarOccurrence(cursor,frequency);}
+    }
+
+    private static DateTime NextCalendarOccurrence(DateTime value,string frequency) { if(frequency=="daily")return value.AddDays(1);if(frequency=="weekly")return value.AddDays(7);if(frequency=="monthly")return value.AddMonths(1);if(frequency=="yearly")return value.AddYears(1);return DateTime.MaxValue; }
+    private static DateTime CalendarRecordDate(Dictionary<string,string> row) { DateTime parsed;bool allDay=row.ContainsKey("all_day")&&row["all_day"]=="1";string raw=allDay&&row.ContainsKey("date_value")?row["date_value"]:(row.ContainsKey("start_utc")&&row["start_utc"]!=""?row["start_utc"]:row.ContainsKey("date_value")?row["date_value"]:"");if(!DateTime.TryParse(raw,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal,out parsed))return DateTime.MinValue;return allDay?parsed.Date:parsed.ToLocalTime(); }
+
+    private void ProjectPortableRecord(Dictionary<string,string> row,DateTime start,DateTime end,List<Dictionary<string,string> > result) {
+      Dictionary<string,object> data;try{data=json.DeserializeObject(row["data_json"]) as Dictionary<string,object>;}catch{return;}if(data==null)return;string slug=row["slug"],type=row["record_type"],date="",title="",kind="event",frequency="",color=slug=="kitchen-planner"?"#c35900":"#28709b";
+      if(slug=="finance-manager"){
+        if(type=="transactions"){date=GetString(data,"transaction_date");title=GetString(data,"payee");if(title=="")title="Finance transaction";kind="transaction";}
+        else if(type=="recurring"){date=GetString(data,"next_date");title=GetString(data,"name");kind="reminder";}
+        else if(type=="goals"){date=GetString(data,"target_date");title=GetString(data,"name");kind="target";}
+        else if(type=="debts"){date=GetString(data,"next_due_date");title=GetString(data,"name");kind="due";}
+      }else{
+        if(type=="plans"){date=FirstPortableDate(data,new[]{"date_value","planned_date","scheduled_date","start_date"});title=FirstPortableText(data,new[]{"title","meal_name","recipe_title"});kind="meal";frequency=GetString(data,"frequency");if(!new[]{"daily","weekly","monthly","yearly"}.Contains(frequency))frequency="";}
+        else if(type=="reminders"){date=FirstPortableDate(data,new[]{"date_value","due_date"});title=FirstPortableText(data,new[]{"title","name"});kind=GetString(data,"reminder_kind")=="restock"?"restock":"reminder";}
+        else if(type=="stock_movements"&&GetDouble(data,"quantity_delta")>0){date=FirstPortableDate(data,new[]{"expiry_date","best_before_date"});title="Pantry expiry: "+FirstPortableText(data,new[]{"ingredient_name","name"});kind="expiry";}
+      }
+      DateTime parsed;if(!ValidDate(date)||!DateTime.TryParseExact(date,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out parsed))return;if(title.Trim()=="")title=slug=="kitchen-planner"?"Kitchen plan":"Finance date";
+      Dictionary<string,string> projected=new Dictionary<string,string>{{"long_id",slug+":"+row["long_id"]},{"source_id","plugin."+slug},{"source_opaque_id",row["long_id"]},{"item_kind",kind},{"title",title},{"start_utc",""},{"end_utc",""},{"date_value",date},{"timezone","UTC"},{"all_day","1"},{"status","planned"},{"recurrence_json",frequency==""?"":json.Serialize(new Dictionary<string,object>{{"frequency",frequency},{"interval",1}})},{"reminder_json",""},{"color",color},{"notes",""},{"revision",row["version"]}};
+      ExpandCalendarRow(projected,start,end,new HashSet<string>(),result);
+    }
+
+    private static string FirstPortableDate(Dictionary<string,object> data,string[] keys){foreach(string key in keys){string value=GetString(data,key);if(ValidDate(value))return value;}return "";}
+    private static string FirstPortableText(Dictionary<string,object> data,string[] keys){foreach(string key in keys){string value=GetString(data,key).Trim();if(value!="")return value;}return "";}
+
+    internal void PreviewCalendarIcs(string source) {
+      if(String.IsNullOrWhiteSpace(source)||source.Length>200000)throw new InvalidDataException("Paste an ICS file of 200 KB or fewer.");List<Dictionary<string,object> > records=ParseCalendarIcs(source);if(records.Count==0)throw new InvalidDataException("No supported VEVENT entries were found.");if(records.Count>1000)throw new InvalidDataException("An ICS preview supports up to 1,000 items at a time.");int duplicates=0;
+      using(SqliteDb db=Open()){foreach(Dictionary<string,object> record in records)if(db.QueryOne("SELECT long_id FROM local_calendar_items WHERE source_id='ics.import' AND source_opaque_id=? AND status!='deleted' LIMIT 1",GetString(record,"source_opaque_id"))!=null)duplicates++;Dictionary<string,object> preview=new Dictionary<string,object>{{"records",records},{"count",records.Count},{"duplicates",duplicates},{"fingerprint",HashText(source)}};db.Execute("INSERT INTO local_plugin_settings(slug,setting_key,setting_value,updated_at)VALUES('core-calendar','ics_preview',?,?) ON CONFLICT(slug,setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at",json.Serialize(preview),Now());}ProtectDatabaseFile();
+    }
+
+    internal Dictionary<string,object> PendingCalendarIcs() {
+      using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT setting_value FROM local_plugin_settings WHERE slug='core-calendar' AND setting_key='ics_preview' LIMIT 1");if(row==null)return new Dictionary<string,object>();try{return json.DeserializeObject(row["setting_value"]) as Dictionary<string,object>??new Dictionary<string,object>();}catch{return new Dictionary<string,object>();}}
+    }
+
+    internal void DiscardPendingCalendarIcs(){using(SqliteDb db=Open())db.Execute("DELETE FROM local_plugin_settings WHERE slug='core-calendar' AND setting_key='ics_preview'");ProtectDatabaseFile();}
+
+    internal int ImportPendingCalendarIcs() {
+      Dictionary<string,object> preview=PendingCalendarIcs();object recordsObject;if(!preview.TryGetValue("records",out recordsObject)||!(recordsObject is object[]))throw new InvalidOperationException("Preview the ICS file before importing it.");object[] records=(object[])recordsObject;int imported=0;string now=Now();
+      using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{foreach(object value in records){Dictionary<string,object> record=value as Dictionary<string,object>;if(record==null)continue;string opaque=GetString(record,"source_opaque_id");if(db.QueryOne("SELECT long_id FROM local_calendar_items WHERE source_id='ics.import' AND source_opaque_id=? AND status!='deleted' LIMIT 1",opaque)!=null)continue;db.Execute("INSERT INTO local_calendar_items(long_id,source_id,source_opaque_id,item_kind,title,start_utc,end_utc,date_value,timezone,all_day,status,recurrence_json,reminder_json,color,notes,revision,created_at,updated_at)VALUES(?,'ics.import',?,'event',?,?,?,?,?,?,'planned',?,'','#507b9b','Imported from ICS',1,?,?)",NewLongId("calendar_items"),opaque,GetString(record,"title"),GetString(record,"start_utc"),GetString(record,"end_utc"),GetString(record,"date_value"),"UTC",ToBool(record.ContainsKey("all_day")?record["all_day"]:false)?1:0,GetString(record,"recurrence_json"),now,now);imported++;}db.Execute("INSERT OR IGNORE INTO local_calendar_ics_feeds(long_id,source_name,source_fingerprint,imported_at)VALUES(?,'One-time ICS import',?,?)",NewLongId("calendar_ics"),GetString(preview,"fingerprint"),now);db.Execute("DELETE FROM local_plugin_settings WHERE slug='core-calendar' AND setting_key='ics_preview'");db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}
+      ProtectDatabaseFile();return imported;
+    }
+
+    private List<Dictionary<string,object> > ParseCalendarIcs(string source) {
+      source=source.Replace("\r\n ","").Replace("\r\n\t","").Replace("\n ","").Replace("\n\t","");string[] lines=source.Replace("\r\n","\n").Replace('\r','\n').Split('\n');List<Dictionary<string,object> > records=new List<Dictionary<string,object> >();Dictionary<string,string> current=null;
+      foreach(string raw in lines){string line=raw.TrimEnd();if(line.Equals("BEGIN:VEVENT",StringComparison.OrdinalIgnoreCase)){current=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);continue;}if(line.Equals("END:VEVENT",StringComparison.OrdinalIgnoreCase)){if(current!=null){Dictionary<string,object> parsed=ParseCalendarIcsEvent(current);if(parsed!=null)records.Add(parsed);}current=null;continue;}if(current==null)continue;int colon=line.IndexOf(':');if(colon<1)continue;string left=line.Substring(0,colon),key=left.Split(';')[0].ToUpperInvariant(),value=line.Substring(colon+1);current[key]=value;if(left.IndexOf("VALUE=DATE",StringComparison.OrdinalIgnoreCase)>=0)current[key+"_DATE_ONLY"]="1";}
+      return records;
+    }
+
+    private Dictionary<string,object> ParseCalendarIcsEvent(Dictionary<string,string> item) {
+      string rawStart=item.ContainsKey("DTSTART")?item["DTSTART"]:"",rawEnd=item.ContainsKey("DTEND")?item["DTEND"]:"",title=CalendarIcsUnescape(item.ContainsKey("SUMMARY")?item["SUMMARY"]:"Untitled calendar item");bool allDay=item.ContainsKey("DTSTART_DATE_ONLY")||rawStart.Length==8;DateTime start;if(!ParseCalendarIcsDate(rawStart,allDay,out start))return null;DateTime end;if(!ParseCalendarIcsDate(rawEnd,allDay,out end))end=DateTime.MinValue;string uid=item.ContainsKey("UID")?item["UID"].Trim():"";if(uid=="")uid=HashText(title+"|"+rawStart+"|"+rawEnd);string recurrence="";if(item.ContainsKey("RRULE")){string frequency=item["RRULE"].Split(';').Select(part=>part.Split('=')).Where(part=>part.Length==2&&part[0].Equals("FREQ",StringComparison.OrdinalIgnoreCase)).Select(part=>part[1].ToLowerInvariant()).FirstOrDefault();if(new[]{"daily","weekly","monthly","yearly"}.Contains(frequency))recurrence=json.Serialize(new Dictionary<string,object>{{"frequency",frequency},{"interval",1}});}
+      return new Dictionary<string,object>{{"source_opaque_id",HashText(uid).Substring(0,40)},{"title",title.Length>190?title.Substring(0,190):title},{"start_utc",allDay?"":start.ToUniversalTime().ToString("o",CultureInfo.InvariantCulture)},{"end_utc",allDay||end==DateTime.MinValue?"":end.ToUniversalTime().ToString("o",CultureInfo.InvariantCulture)},{"date_value",start.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)},{"all_day",allDay},{"recurrence_json",recurrence}};
+    }
+
+    private static bool ParseCalendarIcsDate(string raw,bool dateOnly,out DateTime value){value=DateTime.MinValue;if(String.IsNullOrEmpty(raw))return false;if(dateOnly)return DateTime.TryParseExact(raw,"yyyyMMdd",CultureInfo.InvariantCulture,DateTimeStyles.None,out value);string[] formats={"yyyyMMdd'T'HHmmss'Z'","yyyyMMdd'T'HHmm'Z'","yyyyMMdd'T'HHmmss","yyyyMMdd'T'HHmm"};DateTimeStyles styles=raw.EndsWith("Z",StringComparison.OrdinalIgnoreCase)?DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal:DateTimeStyles.AssumeLocal;return DateTime.TryParseExact(raw,formats,CultureInfo.InvariantCulture,styles,out value);}
+    private static string CalendarIcsUnescape(string value){return (value??"").Replace("\\n"," ").Replace("\\N"," ").Replace("\\,",",").Replace("\\;",";").Replace("\\\\","\\").Trim();}
+
+    internal string ExportCalendarIcs() {
+      StringBuilder output=new StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Racinage Free//Local Calendar//EN\r\nCALSCALE:GREGORIAN\r\n");
+      using(SqliteDb db=Open())foreach(Dictionary<string,string> row in db.Query("SELECT long_id,title,start_utc,end_utc,date_value,all_day,recurrence_json,updated_at FROM local_calendar_items WHERE status!='deleted' ORDER BY date_value,start_utc")){output.Append("BEGIN:VEVENT\r\nUID:").Append(CalendarIcsEscape(row["long_id"]+"@racinage-free.local")).Append("\r\nDTSTAMP:").Append(CalendarIcsUtc(row["updated_at"])).Append("\r\nSUMMARY:").Append(CalendarIcsEscape(row["title"])).Append("\r\n");if(row["all_day"]=="1")output.Append("DTSTART;VALUE=DATE:").Append(row["date_value"].Replace("-","")).Append("\r\n");else{output.Append("DTSTART:").Append(CalendarIcsUtc(row["start_utc"])).Append("\r\n");if(row["end_utc"]!="")output.Append("DTEND:").Append(CalendarIcsUtc(row["end_utc"])).Append("\r\n");}string frequency="";try{Dictionary<string,object> recurrence=json.DeserializeObject(row["recurrence_json"]) as Dictionary<string,object>;if(recurrence!=null)frequency=GetString(recurrence,"frequency").ToUpperInvariant();}catch{}if(new[]{"DAILY","WEEKLY","MONTHLY","YEARLY"}.Contains(frequency))output.Append("RRULE:FREQ=").Append(frequency).Append("\r\n");output.Append("END:VEVENT\r\n");}
+      return output.Append("END:VCALENDAR\r\n").ToString();
+    }
+
+    private static string CalendarIcsUtc(string value){DateTime parsed;if(!DateTime.TryParse(value,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal|DateTimeStyles.AdjustToUniversal,out parsed))parsed=DateTime.UtcNow;return parsed.ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'",CultureInfo.InvariantCulture);}
+    private static string CalendarIcsEscape(string value){return (value??"").Replace("\\","\\\\").Replace(";","\\;").Replace(",","\\,").Replace("\r","").Replace("\n","\\n");}
 
     private static bool HasColumn(SqliteDb db,string table,string column) {
       foreach(Dictionary<string,string> row in db.Query("PRAGMA table_info("+table+")"))if(String.Equals(row["name"],column,StringComparison.OrdinalIgnoreCase))return true;return false;
@@ -1368,13 +1652,255 @@ namespace RacinageFreeDesktop {
         if(action=="export_data")return NameGenExport(slug);
         if(action=="import_data")return NameGenImport(slug,payload);
       }
+      if(slug=="kitchen-planner"){
+        if(action=="bootstrap")return KitchenBootstrap(slug);
+        if(action=="save_workspace")return KitchenSaveRecord(slug,"workspaces",payload);
+        if(action=="save_recipe")return KitchenSaveRecord(slug,"recipes",payload);
+        if(action=="save_ingredient")return KitchenSaveRecord(slug,"ingredients",payload);
+        if(action=="save_pantry_movement")return KitchenSaveRecord(slug,"stock_movements",payload);
+        if(action=="save_cooking_log")return KitchenSaveCookingLog(slug,payload);
+        if(action=="preview_cooking_deductions")return KitchenPreviewCookingDeductions(slug,payload);
+        if(action=="save_plan")return KitchenSaveRecord(slug,"plans",payload);
+        if(action=="save_profile")return KitchenSaveRecord(slug,"profiles",payload);
+        if(action=="save_favorite")return KitchenSaveRecord(slug,"favorites",payload);
+        if(action=="save_shopping_list")return KitchenSaveRecord(slug,"shopping_lists",payload);
+        if(action=="save_reminder")return KitchenSaveRecord(slug,"reminders",payload);
+        if(action=="save_taxonomy")return KitchenSaveTaxonomy(slug,payload);
+        if(action=="delete_record")return KitchenDeleteRecord(slug,payload);
+        if(action=="export_data")return KitchenExport(slug);
+        if(action=="import_preview")return KitchenImportPreview(slug,payload);
+        if(action=="import_execute")return KitchenImportExecute(slug);
+        if(action=="calendar_list")return KitchenCalendarList(payload);
+        if(action=="safe_fetch")return KitchenSafeFetch(payload);
+        if(action=="open_source_url")return KitchenOpenSourceUrl(payload);
+        if(action=="local_ai_status")return KitchenLocalAiStatus();
+        if(action=="kitchen_media_upload")return KitchenMediaUpload(slug,payload);
+        if(action=="kitchen_media_get")return KitchenMediaGet(slug,payload);
+        if(action=="kitchen_media_delete")return KitchenMediaDelete(slug,payload);
+      }
       throw new InvalidOperationException("Unknown local plugin action.");
     }
 
-    private bool PluginActionAllowed(string slug,string action){
+    internal bool PluginActionAllowed(string slug,string action){
       if(!PluginCatalogClient.ValidSlug(slug)||String.IsNullOrWhiteSpace(action))return false;
+      if(!KnownPluginOperations(slug).Contains(action))return false;
       using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT bridge_operations FROM plugin_installs WHERE slug=? AND status='enabled' LIMIT 1",slug);if(row==null)return false;return (row["bridge_operations"]??"").Split(',').Contains(action);}
     }
+
+    private static string[] KnownPluginOperations(string slug){
+      if(slug=="finance-manager")return new[]{"bootstrap","save","batch_save","delete","settings","attachment_upload","attachment_get","attachment_delete"};
+      if(slug=="namegen")return new[]{"bootstrap","save_record","delete_record","save_setting","export_data","import_data"};
+      if(slug=="kitchen-planner")return new[]{"bootstrap","save_workspace","save_recipe","save_ingredient","save_pantry_movement","save_cooking_log","preview_cooking_deductions","save_plan","save_profile","save_favorite","save_shopping_list","save_reminder","save_taxonomy","delete_record","export_data","import_preview","import_execute","calendar_list","safe_fetch","open_source_url","local_ai_status","local_ai_extract","kitchen_media_upload","kitchen_media_get","kitchen_media_delete"};
+      return new string[0];
+    }
+
+    private static readonly string[] KitchenRecordTypes={"workspaces","recipes","ingredients","stock_movements","cooking_logs","plans","categories","tags","profiles","favorites","shopping_lists","reminders"};
+
+    private object KitchenBootstrap(string slug){
+      using(SqliteDb db=Open()){
+        List<Dictionary<string,object> > records=new List<Dictionary<string,object> >();List<Dictionary<string,object> > media=new List<Dictionary<string,object> >();Dictionary<string,double> stock=new Dictionary<string,double>();Dictionary<string,int> cookingCounts=new Dictionary<string,int>();
+        foreach(Dictionary<string,string> row in db.Query("SELECT record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at FROM local_plugin_records WHERE slug=? AND status!='deleted' ORDER BY CASE record_type WHEN 'workspaces' THEN 0 WHEN 'categories' THEN 1 WHEN 'tags' THEN 2 WHEN 'profiles' THEN 3 WHEN 'ingredients' THEN 4 WHEN 'recipes' THEN 5 ELSE 6 END,created_at,long_id",slug)){
+          Dictionary<string,object> data;try{data=json.DeserializeObject(row["data_json"]) as Dictionary<string,object>;}catch{continue;}if(data==null)data=new Dictionary<string,object>();Dictionary<string,object> item=new Dictionary<string,object>{{"record_type",row["record_type"]},{"long_id",row["long_id"]},{"workspace_long_id",row["workspace_long_id"]},{"data",data},{"version",ToInt(row["version"])},{"status",row["status"]},{"created_at",row["created_at"]},{"updated_at",row["updated_at"]}};records.Add(item);
+          if(row["record_type"]=="stock_movements"){string ingredient=GetString(data,"ingredient_long_id");if(ingredient!=""){if(!stock.ContainsKey(ingredient))stock[ingredient]=0;stock[ingredient]+=GetDouble(data,"quantity_delta");}}
+          if(row["record_type"]=="cooking_logs"){string recipe=GetString(data,"recipe_long_id");if(recipe!=""){if(!cookingCounts.ContainsKey(recipe))cookingCounts[recipe]=0;cookingCounts[recipe]++;}}
+        }
+        foreach(Dictionary<string,string> row in db.Query("SELECT long_id,workspace_long_id,transaction_long_id,original_name,mime_type,file_size,version,created_at FROM local_plugin_attachments WHERE slug=? AND status='active' ORDER BY created_at",slug))media.Add(new Dictionary<string,object>{{"long_id",row["long_id"]},{"workspace_long_id",row["workspace_long_id"]},{"recipe_long_id",row["transaction_long_id"]},{"original_name",row["original_name"]},{"mime_type",row["mime_type"]},{"file_size",ToLong(row["file_size"])},{"version",ToInt(row["version"])},{"created_at",row["created_at"]}});
+        return new Dictionary<string,object>{{"format","racinage-kitchen-planner"},{"version",1},{"offline",true},{"records",records},{"media",media},{"stock",stock},{"cooking_counts",cookingCounts},{"display_currency",GetDisplayCurrency()},{"ai",KitchenLocalAiStatus()}};
+      }
+    }
+
+    private object KitchenSaveTaxonomy(string slug,Dictionary<string,object> payload){string taxonomy=GetString(payload,"taxonomy_type");if(taxonomy!="category"&&taxonomy!="tag")throw new InvalidDataException("Choose a category or tag.");return KitchenSaveRecord(slug,taxonomy=="category"?"categories":"tags",payload);}
+
+    private object KitchenSaveRecord(string slug,string type,Dictionary<string,object> payload){
+      if(!KitchenRecordTypes.Contains(type))throw new InvalidDataException("Unknown Kitchen record type.");
+      string workspace=SafeLongId(GetString(payload,"workspace_long_id")),longId=SafeLongId(GetString(payload,"long_id"));
+      Dictionary<string,object> data=GetObject(payload,"data");
+      if(type=="workspaces"){
+        workspace="";string name=GetString(data,"name").Trim(),workspaceType=GetString(data,"workspace_type");
+        if(name==""||name.Length>120||!new[]{"personal","family","group"}.Contains(workspaceType))throw new InvalidDataException("Enter a workspace name and valid type.");
+      }else if(workspace=="")throw new InvalidDataException("Choose a Kitchen workspace.");
+      if(type=="recipes"){
+        string title=GetString(data,"title").Trim(),status=GetString(data,"status");double servings=GetDouble(data,"servings");
+        if(title==""||title.Length>190||!new[]{"pending","active","duplicate","archived"}.Contains(status))throw new InvalidDataException("Enter a recipe title and valid status.");
+        if(servings<=0||servings>10000)throw new InvalidDataException("Recipe servings must be greater than zero.");
+        object[] ingredients=GetArray(data,"ingredients"),steps=GetArray(data,"steps");
+        if(ingredients.Length>300||steps.Length>300)throw new InvalidDataException("A recipe allows up to 300 ingredients and 300 steps.");
+        bool complete=ingredients.Length>0&&steps.Length>0;
+        foreach(object value in ingredients){Dictionary<string,object> line=value as Dictionary<string,object>;if(line==null||GetString(line,"name").Trim()=="")throw new InvalidDataException("Every recipe ingredient needs a specific name.");if(!ToBool(line.ContainsKey("optional")?line["optional"]:false)&&GetDouble(line,"amount")<=0)complete=false;}
+        foreach(object value in steps){Dictionary<string,object> step=value as Dictionary<string,object>;if(step==null||GetString(step,"action").Trim()=="")complete=false;}
+        if(status=="active"&&!complete)throw new InvalidDataException("Keep this recipe Pending until it has useful quantities and ordered preparation steps.");
+        KitchenValidateOptionalHttpsUrl(data,"source_url");
+        data["fingerprint"]=KitchenRecipeFingerprint(data);
+      }
+      if(type=="ingredients"){
+        if(GetString(data,"name").Trim()=="")throw new InvalidDataException("Enter a specific ingredient name.");
+        if(GetDouble(data,"package_quantity")<0||GetDouble(data,"package_cost")<0||GetDouble(data,"minimum_stock")<0)throw new InvalidDataException("Ingredient price and stock values cannot be negative.");
+        KitchenValidateOptionalHttpsUrl(data,"shopping_url");
+      }
+      if(type=="stock_movements"&&(GetDouble(data,"quantity_delta")==0||!ValidDate(GetString(data,"movement_date"))))throw new InvalidDataException("Enter a non-zero stock quantity and valid date.");
+      if(type=="cooking_logs"&&(GetDouble(data,"servings")<=0||!ValidDate(GetString(data,"cooked_date"))))throw new InvalidDataException("Enter cooked servings and a valid date.");
+      if(type=="plans"){
+        if(!ValidDate(GetString(data,"date_value")))throw new InvalidDataException("Choose a valid plan date.");
+        string frequency=GetString(data,"frequency");if(frequency!=""&&!new[]{"daily","weekly","monthly","yearly"}.Contains(frequency))throw new InvalidDataException("Choose a supported plan recurrence.");
+      }
+      if((type=="categories"||type=="tags"||type=="profiles")&&GetString(data,"name").Trim()=="")throw new InvalidDataException("Enter a name.");
+      if(type=="reminders"&&!ValidDate(GetString(data,"date_value")))throw new InvalidDataException("Choose a valid reminder date.");
+      string encoded;
+      using(SqliteDb db=Open()){
+        if(type!="workspaces")RequireReference(db,slug,"","workspaces",workspace);
+        if(type=="stock_movements")RequireKitchenWorkspaceReference(db,slug,workspace,"ingredients",GetString(data,"ingredient_long_id"));
+        if(type=="cooking_logs")RequireKitchenWorkspaceReference(db,slug,workspace,"recipes",GetString(data,"recipe_long_id"));
+        string recipe=GetString(data,"recipe_long_id");
+        if(type=="plans"&&recipe!="")RequireKitchenWorkspaceReference(db,slug,workspace,"recipes",recipe);
+        if(type=="favorites"){
+          RequireKitchenWorkspaceReference(db,slug,workspace,"profiles",GetString(data,"profile_long_id"));
+          RequireKitchenWorkspaceReference(db,slug,workspace,"recipes",GetString(data,"recipe_long_id"));
+        }
+        if(type=="recipes"){
+          string fingerprint=GetString(data,"fingerprint");
+          foreach(Dictionary<string,string> row in db.Query("SELECT long_id,data_json FROM local_plugin_records WHERE slug=? AND record_type='recipes' AND workspace_long_id=? AND status='active' AND long_id!=? ORDER BY updated_at DESC LIMIT 5000",slug,workspace,longId)){
+            Dictionary<string,object> other;try{other=json.DeserializeObject(row["data_json"]) as Dictionary<string,object>;}catch{continue;}
+            if(other!=null&&fingerprint!=""&&FixedEquals(fingerprint,GetString(other,"fingerprint"))){data["status"]="duplicate";data["duplicate_of"]=row["long_id"];break;}
+          }
+        }
+        encoded=json.Serialize(data);if(encoded.Length>250000)throw new InvalidDataException("The Kitchen record is too large.");
+        string now=Now();
+        if(longId!=""){
+          Dictionary<string,string> current=db.QueryOne("SELECT version FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=? AND status!='deleted' LIMIT 1",slug,type,longId,workspace);if(current==null)throw new InvalidDataException("The Kitchen record is unavailable.");
+          int version=GetInt(payload,"version");if(version>0&&version!=ToInt(current["version"]))throw new InvalidOperationException("This Kitchen record changed in another window. Reopen it and try again.");
+          db.Execute("UPDATE local_plugin_records SET data_json=?,version=version+1,status='active',updated_at=? WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=?",encoded,now,slug,type,longId,workspace);
+        }else{
+          if(ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_records WHERE slug=? AND status!='deleted'",slug))>=20000)throw new InvalidOperationException("The local Kitchen record limit was reached.");
+          longId=NewLongId(type);db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,type,longId,workspace,encoded,now,now);
+        }
+      }
+      ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",longId},{"status",GetString(data,"status")}};
+    }
+
+    private static string KitchenRecipeFingerprint(Dictionary<string,object> data){
+      double servings=Math.Max(0.000001,GetDouble(data,"servings"));List<string> ingredients=new List<string>();
+      foreach(object value in GetArray(data,"ingredients")){Dictionary<string,object> line=value as Dictionary<string,object>;if(line==null)continue;ingredients.Add(KitchenNormalize(GetString(line,"name"))+"|"+(GetDouble(line,"amount")/servings).ToString("0.######",CultureInfo.InvariantCulture)+"|"+KitchenNormalize(GetString(line,"unit"))+"|"+KitchenNormalize(GetString(line,"preparation")));}
+      ingredients.Sort(StringComparer.Ordinal);List<string> steps=new List<string>();foreach(object value in GetArray(data,"steps")){Dictionary<string,object> step=value as Dictionary<string,object>;if(step!=null)steps.Add(KitchenNormalize(GetString(step,"action")));}
+      return HashText(String.Join(";",ingredients)+"||"+String.Join(";",steps));
+    }
+
+    private static string KitchenNormalize(string value){return String.Join(" ",(value??"").Trim().ToLowerInvariant().Split(new[]{' ','\t','\r','\n'},StringSplitOptions.RemoveEmptyEntries));}
+
+    private static void KitchenValidateOptionalHttpsUrl(Dictionary<string,object> data,string key){string raw=GetString(data,key).Trim();if(raw==""){data[key]="";return;}Uri uri;if(raw.Length>1000||!Uri.TryCreate(raw,UriKind.Absolute,out uri)||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo!=""||uri.Port!=443)throw new InvalidDataException("Kitchen links must use a public HTTPS URL on the standard secure port.");data[key]=uri.AbsoluteUri;}
+
+    private static void RequireKitchenWorkspaceReference(SqliteDb db,string slug,string workspace,string type,string longId){if(SafeLongId(longId)==""||db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,type,longId,workspace)==null)throw new InvalidDataException("The selected Kitchen record is unavailable in this workspace.");}
+
+    private object KitchenPreviewCookingDeductions(string slug,Dictionary<string,object> payload){
+      string workspace=SafeLongId(GetString(payload,"workspace_long_id")),recipe=SafeLongId(GetString(payload,"recipe_long_id"));double servings=GetDouble(payload,"servings");
+      if(workspace==""||recipe==""||servings<=0||servings>10000)throw new InvalidDataException("Choose a recipe and valid number of servings.");
+      using(SqliteDb db=Open())return KitchenCookingPreview(db,slug,workspace,recipe,servings);
+    }
+
+    private Dictionary<string,object> KitchenCookingPreview(SqliteDb db,string slug,string workspace,string recipe,double servings){
+      Dictionary<string,string> recipeRow=db.QueryOne("SELECT data_json FROM local_plugin_records WHERE slug=? AND record_type='recipes' AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,recipe,workspace);if(recipeRow==null)throw new InvalidDataException("The selected recipe is unavailable in this workspace.");
+      Dictionary<string,object> recipeData=json.DeserializeObject(recipeRow["data_json"]) as Dictionary<string,object>;if(recipeData==null)throw new InvalidDataException("The selected recipe data is unavailable.");double baseServings=GetDouble(recipeData,"servings");if(baseServings<=0)throw new InvalidDataException("The selected recipe has invalid servings.");double scale=servings/baseServings;
+      Dictionary<string,double> stock=new Dictionary<string,double>();foreach(Dictionary<string,string> row in db.Query("SELECT data_json FROM local_plugin_records WHERE slug=? AND record_type='stock_movements' AND workspace_long_id=? AND status='active'",slug,workspace)){Dictionary<string,object> movement=json.DeserializeObject(row["data_json"]) as Dictionary<string,object>;if(movement==null)continue;string ingredient=GetString(movement,"ingredient_long_id");if(!stock.ContainsKey(ingredient))stock[ingredient]=0;stock[ingredient]+=GetDouble(movement,"quantity_delta");}
+      List<Dictionary<string,object> > deductions=new List<Dictionary<string,object> >();bool ambiguous=false,shortages=false;double estimatedCost=0;
+      foreach(object value in GetArray(recipeData,"ingredients")){
+        Dictionary<string,object> line=value as Dictionary<string,object>;if(line==null||ToBool(line.ContainsKey("optional")?line["optional"]:false))continue;string ingredient=SafeLongId(GetString(line,"ingredient_long_id")),name=GetString(line,"name").Trim(),unit=GetString(line,"unit").Trim();double needed=Math.Max(0,GetDouble(line,"amount")*scale),available=ingredient!=""&&stock.ContainsKey(ingredient)?stock[ingredient]:0;bool lineAmbiguous=ingredient==""||needed<=0;Dictionary<string,string> catalogRow=null;Dictionary<string,object> catalog=null;
+        if(ingredient!=""){catalogRow=db.QueryOne("SELECT data_json FROM local_plugin_records WHERE slug=? AND record_type='ingredients' AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,ingredient,workspace);if(catalogRow!=null)catalog=json.DeserializeObject(catalogRow["data_json"]) as Dictionary<string,object>;else lineAmbiguous=true;}
+        string stockUnit=catalog==null?"":GetString(catalog,"unit").Trim();if(unit!=""&&stockUnit!=""&&!String.Equals(KitchenNormalize(unit),KitchenNormalize(stockUnit),StringComparison.Ordinal))lineAmbiguous=true;
+        double lineCost=0,packageQuantity=catalog==null?0:GetDouble(catalog,"package_quantity"),packageCost=catalog==null?0:GetDouble(catalog,"package_cost");if(!lineAmbiguous&&packageQuantity>0&&packageCost>=0)lineCost=needed/packageQuantity*packageCost;estimatedCost+=lineCost;double shortage=Math.Max(0,needed-available);ambiguous=ambiguous||lineAmbiguous;shortages=shortages||(!lineAmbiguous&&shortage>0.000001);
+        deductions.Add(new Dictionary<string,object>{{"ingredient_long_id",ingredient},{"name",name},{"needed",needed},{"available",available},{"shortage",shortage},{"unit",unit!=""?unit:stockUnit},{"ambiguous",lineAmbiguous},{"estimated_cost",lineCost}});
+      }
+      return new Dictionary<string,object>{{"recipe_long_id",recipe},{"servings",servings},{"deductions",deductions},{"ambiguous",ambiguous},{"shortages",shortages},{"estimated_cost",Math.Round(estimatedCost,2)},{"currency",GetDisplayCurrency()}};
+    }
+
+    private object KitchenSaveCookingLog(string slug,Dictionary<string,object> payload){
+      string workspace=SafeLongId(GetString(payload,"workspace_long_id"));Dictionary<string,object> data=GetObject(payload,"data");string recipe=SafeLongId(GetString(data,"recipe_long_id")),mode=GetString(data,"pantry_mode");double servings=GetDouble(data,"servings");string cookedDate=GetString(data,"cooked_date");
+      if(workspace==""||recipe==""||servings<=0||!ValidDate(cookedDate)||!new[]{"record_only","deduct"}.Contains(mode))throw new InvalidDataException("Choose a recipe, valid servings, date, and pantry option.");
+      string logId=NewLongId("cooking_logs"),now=Now();using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{
+        RequireReference(db,slug,"","workspaces",workspace);Dictionary<string,object> preview=KitchenCookingPreview(db,slug,workspace,recipe,servings);bool deduct=mode=="deduct";
+        if(deduct&&ToBool(preview["ambiguous"]))throw new InvalidDataException("Review ambiguous ingredient conversions before deducting pantry stock.");
+        if(deduct&&ToBool(preview["shortages"]))throw new InvalidDataException("Pantry stock is insufficient. Record only or add the shortages to Shopping.");
+        data["deductions"]=preview["deductions"];data["estimated_cost_snapshot"]=preview["estimated_cost"];data["currency_snapshot"]=preview["currency"];
+        string encoded=json.Serialize(data);if(encoded.Length>250000)throw new InvalidDataException("The cooking record is too large.");db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,"cooking_logs",logId,workspace,encoded,now,now);
+        if(deduct)foreach(object value in (IEnumerable)preview["deductions"]){Dictionary<string,object> line=value as Dictionary<string,object>;if(line==null||GetDouble(line,"needed")<=0)continue;Dictionary<string,object> movement=new Dictionary<string,object>{{"ingredient_long_id",GetString(line,"ingredient_long_id")},{"quantity_delta",-GetDouble(line,"needed")},{"movement_date",cookedDate},{"reason","cooking"},{"cooking_log_long_id",logId},{"notes","Cooked "+recipe}};db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,"stock_movements",NewLongId("stock_movements"),workspace,json.Serialize(movement),now,now);}
+        db.Exec("COMMIT");
+      }catch{db.Exec("ROLLBACK");throw;}}
+      ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",logId},{"recorded",true}};
+    }
+
+    private object KitchenMediaUpload(string slug,Dictionary<string,object> payload){
+      string workspace=SafeLongId(GetString(payload,"workspace_long_id")),recipe=SafeLongId(GetString(payload,"recipe_long_id")),name=Path.GetFileName(GetString(payload,"original_name"));if(name==""||name.Length>255)throw new InvalidDataException("The image name is invalid.");
+      byte[] content;try{content=Convert.FromBase64String(GetString(payload,"content_base64"));}catch{throw new InvalidDataException("The image content is invalid.");}if(content.Length<12||content.Length>15*1024*1024)throw new InvalidDataException("Recipe images must be 15 MB or fewer.");string mime=DetectFinanceMime(content);if(!new[]{"image/jpeg","image/png","image/webp"}.Contains(mime))throw new InvalidDataException("Only private JPG, PNG, and WebP recipe images are supported.");KitchenValidateImage(content,mime);
+      using(SqliteDb db=Open()){RequireKitchenWorkspaceReference(db,slug,workspace,"recipes",recipe);if(ToInt(db.Scalar("SELECT COUNT(*) FROM local_plugin_attachments WHERE slug=? AND transaction_long_id=? AND status='active'",slug,recipe))>=12)throw new InvalidOperationException("A local recipe allows up to 12 gallery images.");string longId="kitchen_media_"+Guid.NewGuid().ToString("N"),extension=mime=="image/jpeg"?".jpg":mime=="image/png"?".png":".webp",relative=Path.Combine("plugins",slug,"recipes",recipe,longId+extension),path=Path.GetFullPath(Path.Combine(PortablePaths.MediaDir,relative)),mediaRoot=Path.GetFullPath(PortablePaths.MediaDir)+Path.DirectorySeparatorChar;if(!path.StartsWith(mediaRoot,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("The recipe image path is invalid.");Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,content);string now=Now();db.Execute("INSERT INTO local_plugin_attachments(slug,long_id,workspace_long_id,transaction_long_id,relative_path,original_name,mime_type,file_size,version,status,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,1,'active',?,?)",slug,longId,workspace,recipe,relative,name,mime,content.Length,now,now);ProtectDatabaseFile();return new Dictionary<string,object>{{"long_id",longId}};}
+    }
+
+    private object KitchenMediaGet(string slug,Dictionary<string,object> payload){string workspace=SafeLongId(GetString(payload,"workspace_long_id")),recipe=SafeLongId(GetString(payload,"recipe_long_id")),longId=SafeLongId(GetString(payload,"long_id"));using(SqliteDb db=Open()){Dictionary<string,string> row=db.QueryOne("SELECT relative_path,original_name,mime_type,file_size FROM local_plugin_attachments WHERE slug=? AND long_id=? AND workspace_long_id=? AND transaction_long_id=? AND status='active' LIMIT 1",slug,longId,workspace,recipe);if(row==null)throw new InvalidOperationException("The recipe image is unavailable.");string path=Path.GetFullPath(Path.Combine(PortablePaths.MediaDir,row["relative_path"])),mediaRoot=Path.GetFullPath(PortablePaths.MediaDir)+Path.DirectorySeparatorChar;if(!path.StartsWith(mediaRoot,StringComparison.OrdinalIgnoreCase)||!File.Exists(path))throw new InvalidOperationException("The private recipe image file is missing.");if(ToLong(row["file_size"])>15*1024*1024)throw new InvalidOperationException("The private recipe image is too large to open.");return new Dictionary<string,object>{{"original_name",row["original_name"]},{"mime_type",row["mime_type"]},{"content_base64",Convert.ToBase64String(File.ReadAllBytes(path))}};}}
+
+    private static void KitchenValidateImage(byte[] content,string mime){int width=0,height=0;if(mime=="image/webp"){if(!KitchenWebpDimensions(content,out width,out height))throw new InvalidDataException("The WebP recipe image is invalid.");}else try{using(MemoryStream stream=new MemoryStream(content,false))using(Image image=Image.FromStream(stream,true,true)){width=image.Width;height=image.Height;}}catch{throw new InvalidDataException("The recipe image could not be decoded.");}if(width<1||height<1||width>12000||height>12000||(long)width*height>40000000L||Math.Max((double)width/height,(double)height/width)>20d)throw new InvalidDataException("Recipe images must be 40 megapixels or fewer with reasonable dimensions.");}
+
+    private static bool KitchenWebpDimensions(byte[] bytes,out int width,out int height){width=0;height=0;if(bytes==null||bytes.Length<30||Encoding.ASCII.GetString(bytes,0,4)!="RIFF"||Encoding.ASCII.GetString(bytes,8,4)!="WEBP")return false;string chunk=Encoding.ASCII.GetString(bytes,12,4);if(chunk=="VP8X"&&bytes.Length>=30){width=1+bytes[24]+(bytes[25]<<8)+(bytes[26]<<16);height=1+bytes[27]+(bytes[28]<<8)+(bytes[29]<<16);return true;}if(chunk=="VP8 "&&bytes.Length>=30&&bytes[23]==0x9d&&bytes[24]==0x01&&bytes[25]==0x2a){width=(bytes[26]|bytes[27]<<8)&0x3fff;height=(bytes[28]|bytes[29]<<8)&0x3fff;return true;}if(chunk=="VP8L"&&bytes.Length>=25&&bytes[20]==0x2f){width=1+(bytes[21]|((bytes[22]&0x3f)<<8));height=1+((bytes[22]>>6)|(bytes[23]<<2)|((bytes[24]&0x0f)<<10));return true;}return false;}
+
+    private object KitchenMediaDelete(string slug,Dictionary<string,object> payload){string workspace=SafeLongId(GetString(payload,"workspace_long_id")),recipe=SafeLongId(GetString(payload,"recipe_long_id")),longId=SafeLongId(GetString(payload,"long_id"));using(SqliteDb db=Open()){int changed=db.Execute("UPDATE local_plugin_attachments SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND long_id=? AND workspace_long_id=? AND transaction_long_id=? AND status='active'",Now(),slug,longId,workspace,recipe);if(changed!=1)throw new InvalidOperationException("The recipe image is unavailable.");}ProtectDatabaseFile();return new Dictionary<string,object>{{"deleted",true}};}
+
+    private object KitchenDeleteRecord(string slug,Dictionary<string,object> payload){string type=GetString(payload,"record_type"),longId=SafeLongId(GetString(payload,"long_id")),workspace=SafeLongId(GetString(payload,"workspace_long_id"));if(!KitchenRecordTypes.Contains(type)||longId=="")throw new InvalidDataException("The Kitchen record is unavailable.");using(SqliteDb db=Open()){Dictionary<string,string> current=db.QueryOne("SELECT version FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=? AND status!='deleted' LIMIT 1",slug,type,longId,workspace);if(current==null)throw new InvalidDataException("The Kitchen record is unavailable.");int version=GetInt(payload,"version");if(version>0&&version!=ToInt(current["version"]))throw new InvalidOperationException("This Kitchen record changed in another window. Reopen it and try again.");string now=Now();db.Exec("BEGIN IMMEDIATE");try{db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=?",now,slug,type,longId,workspace);if(type=="workspaces"){db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND status='active'",now,slug,longId);db.Execute("UPDATE local_plugin_attachments SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND status='active'",now,slug,longId);}else if(type=="recipes"){db.Execute("UPDATE local_plugin_attachments SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND transaction_long_id=? AND status='active'",now,slug,workspace,longId);db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND record_type IN('favorites','plans') AND status='active' AND json_extract(data_json,'$.recipe_long_id')=?",now,slug,workspace,longId);}else if(type=="profiles")db.Execute("UPDATE local_plugin_records SET status='deleted',version=version+1,updated_at=? WHERE slug=? AND workspace_long_id=? AND record_type='favorites' AND status='active' AND json_extract(data_json,'$.profile_long_id')=?",now,slug,workspace,longId);db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}ProtectDatabaseFile();return new Dictionary<string,object>{{"deleted",true}};}
+
+    private object KitchenExport(string slug){Dictionary<string,object> bootstrap=(Dictionary<string,object>)KitchenBootstrap(slug);return new Dictionary<string,object>{{"format","racinage-kitchen-planner"},{"format_version",1},{"exported_at",Now()},{"records",bootstrap["records"]}};}
+
+    private object[] KitchenValidateBackup(string slug,Dictionary<string,object> backup){
+      if(backup==null||GetString(backup,"format")!="racinage-kitchen-planner"||ToInt(backup.ContainsKey("format_version")?backup["format_version"]:null)!=1)throw new InvalidDataException("This is not a supported Racinage Kitchen Planner backup.");
+      object recordsValue;if(!backup.TryGetValue("records",out recordsValue)||!(recordsValue is object[]))throw new InvalidDataException("The Kitchen backup has no records.");object[] records=(object[])recordsValue;if(records.Length>20000)throw new InvalidDataException("The Kitchen backup contains too many records.");
+      HashSet<string> keys=new HashSet<string>(StringComparer.Ordinal),workspaces=new HashSet<string>(StringComparer.Ordinal),scopedKeys=new HashSet<string>(StringComparer.Ordinal);
+      foreach(object value in records){Dictionary<string,object> record=value as Dictionary<string,object>;if(record==null)throw new InvalidDataException("The Kitchen backup contains an invalid record.");string type=GetString(record,"record_type"),longId=SafeLongId(GetString(record,"long_id")),workspace=SafeLongId(GetString(record,"workspace_long_id"));object rawData;if(!KitchenRecordTypes.Contains(type)||longId==""||!record.TryGetValue("data",out rawData)||!(rawData is Dictionary<string,object>)||!keys.Add(type+"|"+longId))throw new InvalidDataException("The Kitchen backup contains an invalid or duplicate record.");Dictionary<string,object> data=(Dictionary<string,object>)rawData;string encoded=json.Serialize(data);if(encoded.Length>250000)throw new InvalidDataException("A Kitchen backup record is larger than 250 KB.");if(type=="workspaces"){if(workspace!=""||GetString(data,"name").Trim()=="")throw new InvalidDataException("The Kitchen backup contains an invalid workspace.");workspaces.Add(longId);}else{if(workspace=="")throw new InvalidDataException("A Kitchen backup record has no workspace.");scopedKeys.Add(workspace+"|"+type+"|"+longId);}
+        if(type=="recipes"){string status=GetString(data,"status");if(GetString(data,"title").Trim()==""||!new[]{"pending","active","duplicate","archived"}.Contains(status)||GetDouble(data,"servings")<=0||GetArray(data,"ingredients").Length>300||GetArray(data,"steps").Length>300)throw new InvalidDataException("The Kitchen backup contains an invalid recipe.");KitchenValidateOptionalHttpsUrl(data,"source_url");}
+        if(type=="ingredients")KitchenValidateOptionalHttpsUrl(data,"shopping_url");
+        if(type=="stock_movements"&&(!ValidDate(GetString(data,"movement_date"))||GetDouble(data,"quantity_delta")==0))throw new InvalidDataException("The Kitchen backup contains an invalid stock movement.");
+        if(type=="cooking_logs"&&(!ValidDate(GetString(data,"cooked_date"))||GetDouble(data,"servings")<=0))throw new InvalidDataException("The Kitchen backup contains an invalid cooking record.");
+        if((type=="plans"||type=="reminders")&&!ValidDate(GetString(data,"date_value")))throw new InvalidDataException("The Kitchen backup contains an invalid plan or reminder.");
+      }
+      using(SqliteDb db=Open())foreach(object value in records){Dictionary<string,object> record=(Dictionary<string,object>)value;string type=GetString(record,"record_type"),workspace=SafeLongId(GetString(record,"workspace_long_id"));if(type=="workspaces")continue;if(!workspaces.Contains(workspace)&&db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type='workspaces' AND long_id=? AND status='active' LIMIT 1",slug,workspace)==null)throw new InvalidDataException("A Kitchen backup record references an unavailable workspace.");Dictionary<string,object> data=GetObject(record,"data");if(type=="stock_movements")KitchenRequireBackupReference(db,slug,scopedKeys,workspace,"ingredients",GetString(data,"ingredient_long_id"));if(type=="cooking_logs"||type=="plans")KitchenRequireBackupReference(db,slug,scopedKeys,workspace,"recipes",GetString(data,"recipe_long_id"));if(type=="favorites"){KitchenRequireBackupReference(db,slug,scopedKeys,workspace,"profiles",GetString(data,"profile_long_id"));KitchenRequireBackupReference(db,slug,scopedKeys,workspace,"recipes",GetString(data,"recipe_long_id"));}}
+      return records;
+    }
+
+    private static void KitchenRequireBackupReference(SqliteDb db,string slug,HashSet<string> imported,string workspace,string type,string longId){longId=SafeLongId(longId);if(longId==""||(!imported.Contains(workspace+"|"+type+"|"+longId)&&db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? AND workspace_long_id=? AND status='active' LIMIT 1",slug,type,longId,workspace)==null))throw new InvalidDataException("A Kitchen backup record contains an unavailable reference.");}
+
+    private object KitchenImportPreview(string slug,Dictionary<string,object> payload){string source=GetString(payload,"json_text");if(source==""||source.Length>10*1024*1024)throw new InvalidDataException("Choose a Kitchen JSON backup of 10 MB or fewer.");Dictionary<string,object> backup;try{backup=json.DeserializeObject(source) as Dictionary<string,object>;}catch{throw new InvalidDataException("The Kitchen backup is not valid JSON.");}object[] records=KitchenValidateBackup(slug,backup);using(SqliteDb db=Open())db.Execute("INSERT INTO local_plugin_settings(slug,setting_key,setting_value,updated_at)VALUES(?,'import_preview',?,?) ON CONFLICT(slug,setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at",slug,source,Now());ProtectDatabaseFile();return new Dictionary<string,object>{{"count",records.Length},{"ready",true}};}
+
+    private object KitchenImportExecute(string slug){string source;using(SqliteDb db=Open()){Dictionary<string,string> preview=db.QueryOne("SELECT setting_value FROM local_plugin_settings WHERE slug=? AND setting_key='import_preview' LIMIT 1",slug);if(preview==null)throw new InvalidOperationException("Preview a Kitchen backup before restoring it.");source=preview["setting_value"];}Dictionary<string,object> backup=json.DeserializeObject(source) as Dictionary<string,object>;object[] records=KitchenValidateBackup(slug,backup);int imported=0,skipped=0;using(SqliteDb db=Open()){db.Exec("BEGIN IMMEDIATE");try{foreach(object value in records){Dictionary<string,object> record=(Dictionary<string,object>)value;string type=GetString(record,"record_type"),longId=SafeLongId(GetString(record,"long_id")),workspace=SafeLongId(GetString(record,"workspace_long_id"));Dictionary<string,object> data=GetObject(record,"data");if(db.QueryOne("SELECT long_id FROM local_plugin_records WHERE slug=? AND record_type=? AND long_id=? LIMIT 1",slug,type,longId)!=null){skipped++;continue;}string now=Now();db.Execute("INSERT INTO local_plugin_records(slug,record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at)VALUES(?,?,?,?,?,1,'active',?,?)",slug,type,longId,workspace,json.Serialize(data),now,now);imported++;}db.Execute("DELETE FROM local_plugin_settings WHERE slug=? AND setting_key='import_preview'",slug);db.Exec("COMMIT");}catch{db.Exec("ROLLBACK");throw;}}ProtectDatabaseFile();return new Dictionary<string,object>{{"imported",imported},{"skipped",skipped}};}
+
+    private object KitchenCalendarList(Dictionary<string,object> payload){DateTime start,end;string rawStart=GetString(payload,"start"),rawEnd=GetString(payload,"end");if(!DateTime.TryParseExact(rawStart,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out start))start=DateTime.Today;if(!DateTime.TryParseExact(rawEnd,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out end))end=start.AddDays(90);if(end<=start||end>start.AddYears(2))throw new InvalidDataException("Choose a Calendar range of up to two years.");return new Dictionary<string,object>{{"entries",CalendarEntries(start,end).Where(item=>item.ContainsKey("source_id")&&item["source_id"]=="plugin.kitchen-planner").ToList()}};}
+
+    private object KitchenSafeFetch(Dictionary<string,object> payload){
+      string raw=GetString(payload,"url").Trim();Uri uri;if(!Uri.TryCreate(raw,UriKind.Absolute,out uri)||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo!=""||uri.Port!=443)throw new InvalidDataException("Enter a public HTTPS source URL using the standard secure port.");
+      IPAddress address=KitchenResolvePublicAddress(uri.DnsSafeHost);Dictionary<string,object> fetched=KitchenPinnedHttpsGet(uri,address,2*1024*1024);string text=GetString(fetched,"text");
+      return new Dictionary<string,object>{{"url",uri.AbsoluteUri},{"content_type",GetString(fetched,"content_type")},{"text",text},{"sha256",HashText(text)}};
+    }
+
+    private object KitchenOpenSourceUrl(Dictionary<string,object> payload){string raw=GetString(payload,"url").Trim();Uri uri;if(!Uri.TryCreate(raw,UriKind.Absolute,out uri)||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo!=""||uri.Port!=443)throw new InvalidDataException("Only public HTTPS Kitchen source links can be opened.");KitchenResolvePublicAddress(uri.DnsSafeHost);Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});return new Dictionary<string,object>{{"opened",true}};}
+
+    private static IPAddress KitchenResolvePublicAddress(string host){
+      if(String.IsNullOrWhiteSpace(host)||host.Equals("localhost",StringComparison.OrdinalIgnoreCase)||host.EndsWith(".localhost",StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Local and private network source URLs are not allowed.");IPAddress literal;if(IPAddress.TryParse(host,out literal)){if(!KitchenPublicAddress(literal))throw new InvalidDataException("Local and private network source URLs are not allowed.");return literal;}
+      IPAddress[] addresses;try{addresses=Dns.GetHostAddresses(host);}catch{throw new InvalidDataException("The source hostname could not be resolved.");}if(addresses.Length==0||addresses.Any(address=>!KitchenPublicAddress(address)))throw new InvalidDataException("The source hostname did not resolve only to public addresses.");return addresses.First(address=>address.AddressFamily==AddressFamily.InterNetworkV6||address.AddressFamily==AddressFamily.InterNetwork);
+    }
+
+    private static bool KitchenPublicAddress(IPAddress address){
+      if(address==null)return false;if(address.IsIPv4MappedToIPv6)address=address.MapToIPv4();if(IPAddress.IsLoopback(address))return false;byte[] b=address.GetAddressBytes();
+      if(address.AddressFamily==AddressFamily.InterNetwork){if(b[0]==0||b[0]==10||b[0]==127||(b[0]==100&&b[1]>=64&&b[1]<=127)||(b[0]==169&&b[1]==254)||(b[0]==172&&b[1]>=16&&b[1]<=31)||(b[0]==192&&b[1]==168)||(b[0]==192&&b[1]==0&&b[2]<=2)||(b[0]==198&&(b[1]==18||b[1]==19))||(b[0]==198&&b[1]==51&&b[2]==100)||(b[0]==203&&b[1]==0&&b[2]==113)||b[0]>=224)return false;return true;}
+      if(address.AddressFamily!=AddressFamily.InterNetworkV6||address.IsIPv6LinkLocal||address.IsIPv6SiteLocal||address.IsIPv6Multicast||address.Equals(IPAddress.IPv6None)||address.Equals(IPAddress.IPv6Any)||(b[0]&0xfe)==0xfc)return false;
+      if(b[0]==0x20&&b[1]==0x01&&b[2]==0x0d&&b[3]==0xb8)return false;return true;
+    }
+
+    private static Dictionary<string,object> KitchenPinnedHttpsGet(Uri uri,IPAddress address,int maxBytes){
+      using(TcpClient client=new TcpClient(address.AddressFamily)){
+        IAsyncResult pending=client.BeginConnect(address,443,null,null);if(!pending.AsyncWaitHandle.WaitOne(15000)){client.Close();throw new InvalidDataException("The source connection timed out.");}client.EndConnect(pending);client.ReceiveTimeout=15000;client.SendTimeout=15000;
+        using(SslStream stream=new SslStream(client.GetStream(),false)){stream.ReadTimeout=15000;stream.WriteTimeout=15000;stream.AuthenticateAsClient(uri.DnsSafeHost,null,SslProtocols.Tls12,true);string path=String.IsNullOrEmpty(uri.PathAndQuery)?"/":uri.PathAndQuery;string request="GET "+path+" HTTP/1.1\r\nHost: "+uri.IdnHost+"\r\nUser-Agent: RacinageFreeKitchen/"+PortablePaths.Version+"\r\nAccept: text/html,text/plain,application/json,application/ld+json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";byte[] requestBytes=Encoding.ASCII.GetBytes(request);stream.Write(requestBytes,0,requestBytes.Length);stream.Flush();
+          using(MemoryStream raw=new MemoryStream()){byte[] chunk=new byte[8192];int read;while((read=stream.Read(chunk,0,chunk.Length))>0){if(raw.Length+read>maxBytes+128*1024)throw new InvalidDataException("The source is larger than 2 MB.");raw.Write(chunk,0,read);}byte[] response=raw.ToArray();int split=KitchenHeaderEnd(response);if(split<0||split>64*1024)throw new InvalidDataException("The source returned invalid HTTP headers.");string headerText=Encoding.ASCII.GetString(response,0,split);string[] lines=headerText.Split(new[]{"\r\n"},StringSplitOptions.None);string[] status=lines[0].Split(' ');int code;if(status.Length<2||!Int32.TryParse(status[1],out code)||code<200||code>=300)throw new InvalidDataException("The source request was rejected. Redirects must be reviewed and submitted explicitly.");Dictionary<string,string> headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);foreach(string line in lines.Skip(1)){int colon=line.IndexOf(':');if(colon>0)headers[line.Substring(0,colon).Trim()]=line.Substring(colon+1).Trim();}string rawType=headers.ContainsKey("Content-Type")?headers["Content-Type"]:"",contentType=rawType.Split(';')[0].Trim().ToLowerInvariant();if(!new[]{"text/html","text/plain","application/json","application/ld+json"}.Contains(contentType))throw new InvalidDataException("Portable safe fetch supports public text, HTML, and JSON sources only.");if(headers.ContainsKey("Content-Encoding")&&!String.Equals(headers["Content-Encoding"],"identity",StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Compressed source responses are not accepted.");byte[] body=response.Skip(split+4).ToArray();if(headers.ContainsKey("Transfer-Encoding")&&headers["Transfer-Encoding"].IndexOf("chunked",StringComparison.OrdinalIgnoreCase)>=0)body=KitchenDecodeChunked(body,maxBytes);if(body.Length>maxBytes)throw new InvalidDataException("The source is larger than 2 MB.");return new Dictionary<string,object>{{"content_type",contentType},{"text",Encoding.UTF8.GetString(body)}};}
+        }
+      }
+    }
+
+    private static int KitchenHeaderEnd(byte[] bytes){for(int i=0;i+3<bytes.Length;i++)if(bytes[i]==13&&bytes[i+1]==10&&bytes[i+2]==13&&bytes[i+3]==10)return i;return -1;}
+
+    private static byte[] KitchenDecodeChunked(byte[] input,int maxBytes){using(MemoryStream output=new MemoryStream()){int position=0;while(true){int lineEnd=-1;for(int i=position;i+1<input.Length;i++)if(input[i]==13&&input[i+1]==10){lineEnd=i;break;}if(lineEnd<0)throw new InvalidDataException("The source returned invalid chunked data.");string sizeText=Encoding.ASCII.GetString(input,position,lineEnd-position).Split(';')[0].Trim();int size;if(!Int32.TryParse(sizeText,NumberStyles.HexNumber,CultureInfo.InvariantCulture,out size)||size<0)throw new InvalidDataException("The source returned invalid chunked data.");position=lineEnd+2;if(size==0)break;if(position+size+2>input.Length||output.Length+size>maxBytes)throw new InvalidDataException("The source is larger than 2 MB.");output.Write(input,position,size);position+=size;if(input[position]!=13||input[position+1]!=10)throw new InvalidDataException("The source returned invalid chunked data.");position+=2;}return output.ToArray();}}
+
+    private object KitchenLocalAiStatus(){return new Dictionary<string,object>{{"hosted_credits",false},{"loopback_only",true},{"configured",false},{"providers",new[]{"Ollama","LM Studio","custom localhost"}},{"message","Configure a loopback vision-capable provider in the local AI settings. Without vision, imports remain Pending when OCR or text evidence is insufficient."}};}
     private object NameGenBootstrap(string slug){
       using(SqliteDb db=Open()){List<Dictionary<string,object> > records=new List<Dictionary<string,object> >();foreach(Dictionary<string,string> row in db.Query("SELECT record_type,long_id,workspace_long_id,data_json,version,status,created_at,updated_at FROM local_plugin_records WHERE slug=? AND status!='deleted' ORDER BY created_at,long_id",slug)){Dictionary<string,object> item=new Dictionary<string,object>();foreach(KeyValuePair<string,string> pair in row)item[pair.Key]=pair.Value;item["version"]=ToInt(row["version"]);item["data"]=json.DeserializeObject(row["data_json"]);item.Remove("data_json");records.Add(item);}Dictionary<string,object> settings=new Dictionary<string,object>();foreach(Dictionary<string,string> row in db.Query("SELECT setting_key,setting_value FROM local_plugin_settings WHERE slug=?",slug))settings[row["setting_key"]]=row["setting_value"];return new Dictionary<string,object>{{"records",records},{"settings",settings}};}
     }
@@ -1554,6 +2080,7 @@ namespace RacinageFreeDesktop {
     private static string todayUtc(){return DateTime.UtcNow.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);}
 
     private static Dictionary<string,object> GetObject(Dictionary<string,object> values,string key){object value;if(!values.TryGetValue(key,out value)||!(value is Dictionary<string,object>))return new Dictionary<string,object>();return (Dictionary<string,object>)value;}
+    private static object[] GetArray(Dictionary<string,object> values,string key){object value;if(values==null||!values.TryGetValue(key,out value)||value==null)return new object[0];object[] array=value as object[];if(array!=null)return array;ArrayList list=value as ArrayList;return list==null?new object[0]:list.ToArray();}
     private static string GetString(Dictionary<string,object> values,string key){object value;return values.TryGetValue(key,out value)&&value!=null?Convert.ToString(value,CultureInfo.InvariantCulture):"";}
     private static int GetInt(Dictionary<string,object> values,string key){return (int)Math.Max(Int32.MinValue,Math.Min(Int32.MaxValue,GetLong(values,key)));}
     private static long GetLong(Dictionary<string,object> values,string key){object value;if(!values.TryGetValue(key,out value)||value==null)return 0;long parsed;return Int64.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Any,CultureInfo.InvariantCulture,out parsed)?parsed:(long)ToDouble(value);}
@@ -1675,7 +2202,7 @@ namespace RacinageFreeDesktop {
     internal void SavePluginInstall(PortablePluginInfo plugin, string entrypoint) {
       using (SqliteDb db = Open()) {
         string now = Now();
-        string operations=plugin.local!=null&&plugin.local.operations!=null?String.Join(",",plugin.local.operations):"";if(plugin.slug=="finance-manager"&&operations=="")operations="bootstrap,save,batch_save,delete,settings,attachment_upload,attachment_get,attachment_delete";
+        string[] known=KnownPluginOperations(plugin.slug),requested=plugin.local!=null&&plugin.local.operations!=null?plugin.local.operations:new string[0];string operations=String.Join(",",requested.Where(operation=>known.Contains(operation)).Distinct());if(plugin.slug=="finance-manager"&&operations=="")operations=String.Join(",",known);
         db.Execute("INSERT OR REPLACE INTO plugin_installs (slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at,bridge_operations) VALUES (?,?,?,?,?,'enabled',COALESCE((SELECT installed_at FROM plugin_installs WHERE slug=?),?),?,?)", plugin.slug, plugin.name, plugin.version, plugin.checksum_sha256, entrypoint, plugin.slug, now, now,operations);
       }
       ProtectDatabaseFile();

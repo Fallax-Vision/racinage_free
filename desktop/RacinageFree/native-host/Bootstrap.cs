@@ -26,7 +26,7 @@ namespace RacinageFreeBootstrap {
 
         EnsureMutableFolders(root);
         bool launchedFromLauncher = PathsEqual(Application.ExecutablePath, launcher);
-        bool wasRunning = CloseRunningApp(root);
+        CloseRunningApp(root);
         if (!launchedFromLauncher) CopyFileWithRetry(Application.ExecutablePath, launcher, root);
 
         byte[] payloadBytes;
@@ -59,12 +59,10 @@ namespace RacinageFreeBootstrap {
 
         RemoveOtherVersions(root, application);
         CreateShortcuts(launcher, root);
-        if (launchedFromLauncher || wasRunning) {
-          Process.Start(new ProcessStartInfo(executable) {
-            WorkingDirectory = application,
-            UseShellExecute = true
-          });
-        }
+        Process.Start(new ProcessStartInfo(executable) {
+          WorkingDirectory = application,
+          UseShellExecute = true
+        });
       } catch (Exception error) {
         MessageBox.Show(
           "Racinage Free could not prepare its local files.\r\n\r\n" + error.Message,
