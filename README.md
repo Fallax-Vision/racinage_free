@@ -31,6 +31,8 @@ The source tree is now `v0.17.0`. It includes an optional local AI assistant for
 - Bundled Inter variable fonts for consistent offline typography.
 - Signed online catalog for reviewed local-compatible plugins, including monthly/yearly pricing and active hosted reductions, with checksum and archive-path verification.
 - Sandboxed portable plugin pages with an asynchronous manifest-authorized local bridge and hosted links for optional Pro purchases and entitlements.
+- Local Share with Racinage receipts for URI and text payloads, with actions discovered only from signed, installed plugin contracts and a paste/clipboard fallback when Windows package identity is unavailable.
+- Kitchen Planner source imports queue traditional structured-data and semantic-page extraction before optional loopback AI. Racinage Free never consumes hosted AI credits.
 - Single-file bootstrap executable with payload refresh.
 - Racinage icon, screenshot, build script, release manifest, and checksums.
 

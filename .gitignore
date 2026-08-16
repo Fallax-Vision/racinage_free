@@ -1,5 +1,6 @@
 # Build output
 desktop/RacinageFree/dist/
+desktop/RacinageFree/share-target/artifacts/
 /AGENTS.md
 /plans/
 *.log

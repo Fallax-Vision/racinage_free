@@ -15,6 +15,12 @@ Racinage Free accepts plugin metadata only from the HTTPS Racinage catalog after
 
 Browser-rendered HTML, CSS, JavaScript, images, and WebAssembly can always be inspected by a determined user after delivery. Proprietary logic that must remain secret must run on Racinage servers; obfuscation or client-side encryption is not treated as source-code protection.
 
+## Share with Racinage Free
+
+Local share actions are accepted only from the already RSA-verified catalog contract saved for an installed and enabled plugin. Contracts are validated again when listed and executed. Browser input supplies only stable identifiers, expected revisions, authorized target identifiers, CSRF tokens, and idempotency keys; it cannot select native callbacks. Kitchen source fetching rejects credentials, private or mixed DNS results, redirects, unsupported MIME types, compressed responses, oversized content, and non-standard HTTPS ports.
+
+Windows Share Target registration is optional and requires a signed sparse MSIX identity. The registration helper verifies Authenticode status, certificate dates, manifest publisher matching, the exact approved development thumbprint when applicable, and an external location under `%LOCALAPPDATA%\Racinage Free`. It never creates or trusts a certificate automatically.
+
 ## Connected Messaging
 
 Racinage Free uses browser-based device authorization for optional hosted messaging. Account passwords and two-factor codes are handled only by `https://racinage.com`. The app stores scoped refresh tokens with Windows DPAPI and encrypts cached message content and offline queued files for the current Windows user.

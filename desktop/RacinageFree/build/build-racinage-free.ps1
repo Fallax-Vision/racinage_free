@@ -14,6 +14,7 @@ $iconFile = Join-Path $desktopRoot 'assets\racinage.ico'
 $fontRoot = Join-Path $desktopRoot 'assets\fonts\inter'
 $aiAssetRoot = Join-Path $desktopRoot 'assets'
 $portablePluginRoot = Join-Path $desktopRoot 'plugins\finance-manager'
+$shareTargetBuildRoot = Join-Path $desktopRoot 'share-target\artifacts'
 $buildRoot = Join-Path $desktopRoot 'dist'
 $releaseRoot = if ($Development) { Join-Path $buildRoot 'development' } else { Join-Path $projectRoot "releases\desktop\$appName-v$version" }
 $stagingRoot = Join-Path $buildRoot 'staging'
@@ -92,7 +93,7 @@ New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
   /win32icon:$iconFile `
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll `
   /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
-  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
+  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'ShareCore.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $hostExe)) {
   throw 'The Racinage Free native host did not compile.'
 }
@@ -111,6 +112,14 @@ Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable-Italic.woff2') -Desti
 New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'plugins\finance-manager') -Force | Out-Null
 foreach ($file in @('index.html', 'app.css', 'app.js')) {
   Copy-Item -LiteralPath (Join-Path $portablePluginRoot $file) -Destination (Join-Path $stagingRoot 'plugins\finance-manager') -Force
+}
+if (Test-Path -LiteralPath (Join-Path $shareTargetBuildRoot 'external\share-target\RacinageFreeShareTarget.exe')) {
+  New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'share-target') -Force | Out-Null
+  Copy-Item -Path (Join-Path $shareTargetBuildRoot 'external\share-target\*') -Destination (Join-Path $stagingRoot 'share-target') -Recurse -Force
+  if (Test-Path -LiteralPath (Join-Path $shareTargetBuildRoot 'RacinageFree.ShareTarget.msix')) {
+    Copy-Item -LiteralPath (Join-Path $shareTargetBuildRoot 'RacinageFree.ShareTarget.msix') -Destination (Join-Path $stagingRoot 'share-target') -Force
+  }
+  Copy-Item -LiteralPath (Join-Path $desktopRoot 'sparse-package\Register-RacinageFreeShareTarget.ps1') -Destination (Join-Path $stagingRoot 'share-target') -Force
 }
 Set-Content -LiteralPath (Join-Path $stagingRoot 'config.sample.json') -Encoding UTF8 -Value @"
 {

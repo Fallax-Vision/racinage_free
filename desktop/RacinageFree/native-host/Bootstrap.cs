@@ -15,7 +15,7 @@ namespace RacinageFreeBootstrap {
     private const string PayloadResource = "RacinageFree.Payload.zip";
 
     [STAThread]
-    private static void Main() {
+    private static void Main(string[] args) {
       try {
         string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName);
         string application = Path.Combine(root, "app-v" + Version);
@@ -61,7 +61,8 @@ namespace RacinageFreeBootstrap {
         CreateShortcuts(launcher, root);
         Process.Start(new ProcessStartInfo(executable) {
           WorkingDirectory = application,
-          UseShellExecute = true
+          UseShellExecute = true,
+          Arguments = JoinArguments(args)
         });
       } catch (Exception error) {
         MessageBox.Show(
@@ -213,6 +214,17 @@ namespace RacinageFreeBootstrap {
         Path.GetFullPath(first).TrimEnd(Path.DirectorySeparatorChar),
         Path.GetFullPath(second).TrimEnd(Path.DirectorySeparatorChar),
         StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string JoinArguments(string[] args) {
+      if (args == null || args.Length == 0) return "";
+      return String.Join(" ", Array.ConvertAll(args, QuoteArgument));
+    }
+
+    private static string QuoteArgument(string value) {
+      value = value ?? "";
+      if (value.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return value;
+      return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
     private static string ComputeHash(byte[] data) {

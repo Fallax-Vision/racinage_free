@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 rescap">
+  <Identity Name="RacinageFree.ShareTarget" ProcessorArchitecture="x64" Publisher="__PUBLISHER__" Version="0.17.0.0" />
+  <Properties>
+    <DisplayName>Racinage Free</DisplayName>
+    <PublisherDisplayName>Racinage</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+    <Resource Language="fr-fr" />
+  </Resources>
+  <Applications>
+    <Application Id="RacinageFreeShareTarget" Executable="share-target\RacinageFreeShareTarget.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements DisplayName="Racinage Free" Description="Receive links and text in Racinage Free" BackgroundColor="transparent" Square44x44Logo="Assets\Square44x44Logo.png" Square150x150Logo="Assets\Square150x150Logo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.shareTarget" Executable="share-target\RacinageFreeShareTarget.exe">
+          <uap:ShareTarget Description="Share with Racinage Free" uap10:DisplayName="Racinage Free">
+            <uap:DataFormat>Uri</uap:DataFormat>
+            <uap:DataFormat>WebLink</uap:DataFormat>
+            <uap:DataFormat>Text</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>

@@ -35,7 +35,7 @@ namespace RacinageFreeDesktop {
     private static extern bool SetDllDirectory(string lpPathName);
 
     [STAThread]
-    private static void Main() {
+    private static void Main(string[] args) {
       SetDllDirectory(AppDomain.CurrentDomain.BaseDirectory);
       PortablePaths.EnsureMutableFolders();
       PayloadSamples.Ensure();
@@ -47,6 +47,7 @@ namespace RacinageFreeDesktop {
       LocalServer server = null;
       try {
         store.Initialize();
+        store.ImportCommandLineShare(args);
         server = new LocalServer(store);
         server.Start();
         Application.Run(new RacinageWindow(server, store));
@@ -100,9 +101,10 @@ namespace RacinageFreeDesktop {
     internal static readonly string WebViewDir = Path.Combine(Root, "webview");
     internal static readonly string PluginsDir = Path.Combine(Root, "plugins");
     internal static readonly string PluginCacheDir = Path.Combine(Root, "plugin-cache");
+    internal static readonly string ShareInboxDir = Path.Combine(DataDir, "share-inbox");
 
     internal static void EnsureMutableFolders() {
-      foreach (string path in new[] { Root, DataDir, MediaDir, LogsDir, UpdatesDir, TokensDir, WebViewDir, PluginsDir, PluginCacheDir }) {
+      foreach (string path in new[] { Root, DataDir, MediaDir, LogsDir, UpdatesDir, TokensDir, WebViewDir, PluginsDir, PluginCacheDir, ShareInboxDir }) {
         Directory.CreateDirectory(path);
       }
     }
@@ -150,6 +152,7 @@ namespace RacinageFreeDesktop {
     private readonly StatusDotControl statusDot = new StatusDotControl();
     private readonly System.Windows.Forms.Timer statusTimer = new System.Windows.Forms.Timer();
     private readonly NotifyIcon calendarReminderIcon = new NotifyIcon();
+    private readonly FileSystemWatcher shareInboxWatcher = new FileSystemWatcher();
     private Label statusText;
     private string lastError = "";
     private DateTime nextCalendarReminderCheckUtc = DateTime.MinValue;
@@ -173,10 +176,18 @@ namespace RacinageFreeDesktop {
       calendarReminderIcon.BalloonTipClicked += delegate {
         if (browser.CoreWebView2 != null) browser.CoreWebView2.Navigate(server.BaseUrl + "/calendar");
       };
+      shareInboxWatcher.Path = PortablePaths.ShareInboxDir;
+      shareInboxWatcher.Filter = "*.json";
+      shareInboxWatcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
+      shareInboxWatcher.Created += ShareInboxChanged;
+      shareInboxWatcher.Renamed += ShareInboxChanged;
+      shareInboxWatcher.EnableRaisingEvents = true;
       FormClosing += delegate {
         statusTimer.Stop();
         calendarReminderIcon.Visible = false;
         calendarReminderIcon.Dispose();
+        shareInboxWatcher.EnableRaisingEvents = false;
+        shareInboxWatcher.Dispose();
       };
       Shown += async delegate { await StartBrowser(); };
       statusTimer.Interval = 4000;
@@ -344,7 +355,7 @@ namespace RacinageFreeDesktop {
         browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
         try { browser.CoreWebView2.Settings.UserAgent = "RacinageFreePortable/" + PortablePaths.Version; } catch { }
         browser.CoreWebView2.NavigationStarting += BrowserNavigationStarting;
-        browser.CoreWebView2.Navigate(server.BaseUrl + "/");
+        browser.CoreWebView2.Navigate(server.BaseUrl + (store.PendingShareReceiptCount() > 0 ? "/share" : "/"));
         RefreshStatus();
       } catch (Exception error) {
         lastError = error.Message;
@@ -385,6 +396,15 @@ namespace RacinageFreeDesktop {
         return;
       }
       SetStatus(Color.FromArgb(19, 151, 47), "Synced");
+    }
+
+    private void ShareInboxChanged(object sender, FileSystemEventArgs args) {
+      try {
+        BeginInvoke((MethodInvoker)delegate {
+          store.ImportShareInbox();
+          if (browser.CoreWebView2 != null) browser.CoreWebView2.Navigate(server.BaseUrl + "/share");
+        });
+      } catch { }
     }
 
     private void CheckCalendarReminders() {
@@ -456,7 +476,7 @@ namespace RacinageFreeDesktop {
     }
   }
 
-  internal sealed class LocalServer {
+  internal sealed partial class LocalServer {
     private readonly LocalStore store;
     private readonly PortableAiService ai;
     private readonly ConnectedMessaging connected;
@@ -484,6 +504,8 @@ namespace RacinageFreeDesktop {
       File.WriteAllText(Path.Combine(PortablePaths.UpdatesDir, "local-port.txt"), port.ToString(CultureInfo.InvariantCulture), Encoding.UTF8);
       running = true;
       connected.Start();
+      store.ImportShareInbox();
+      store.ProcessPendingKitchenImportsAsync();
       thread = new Thread(ListenLoop);
       thread.IsBackground = true;
       thread.Start();
@@ -540,6 +562,7 @@ namespace RacinageFreeDesktop {
           return;
         }
         if (path == "/calendar") { Calendar(context); return; }
+        if (path == "/share") { Share(context); return; }
         if (path == "/connected-messaging-api") {
           ConnectedMessagingApi(context);
           return;
@@ -588,7 +611,7 @@ namespace RacinageFreeDesktop {
         if (store.ValidateLogin(username, password)) {
           string token = store.IssueSession();
           SetSessionCookie(context, token);
-          Redirect(context, "/family");
+          Redirect(context, store.PendingShareReceiptCount() > 0 ? "/share" : "/family");
           return;
         }
         WriteHtml(context, LoginPage("Invalid username or password."), 401);
@@ -628,7 +651,7 @@ namespace RacinageFreeDesktop {
         store.CreateAccount(displayName, username, password, familyName);
         string token = store.IssueSession();
         SetSessionCookie(context, token);
-        Redirect(context, "/family");
+        Redirect(context, store.PendingShareReceiptCount() > 0 ? "/share" : "/family");
         return;
       }
       WriteHtml(context, StartFreePage(""));
@@ -929,7 +952,7 @@ namespace RacinageFreeDesktop {
         content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family records</a></div><dl class='facts'><div><dt>Name</dt><dd>" + H(family["name"]) + "</dd></div><div><dt>Location</dt><dd>" + H(family["location"] == "" ? "Not set" : family["location"]) + "</dd></div></dl></section>";
       } else if (active == "settings") {
         List<Dictionary<string,string> > rates=store.GetCurrencyRates();string selected=store.GetDisplayCurrency();StringBuilder options=new StringBuilder(),lines=new StringBuilder();foreach(Dictionary<string,string> rate in rates){options.Append("<option value='"+A(rate["code"])+"'"+(rate["code"]==selected?" selected":"")+">"+H(rate["code"]+" - "+rate["name"])+"</option>");lines.Append(rate["code"]+" | "+rate["name"]+" | "+rate["rate"]+"\r\n");}
-        content = "<section class='manage-grid'><article class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></article><article class='manage-card'><h2>Currency localisation</h2><p>Finance Manager uses this account display currency. Rates are entered as the amount of each currency equal to 1 USD.</p><form method='post' action='/manage/settings'>"+CsrfInput()+"<input type='hidden' name='action' value='save_currency_settings'><label>Display currency<select name='display_currency'>"+options+"</select></label><label>Offline currency rates<textarea name='currency_rates' rows='8' spellcheck='false'>"+H(lines.ToString())+"</textarea></label><small>One per line: CODE | Name | rate. USD must remain 1.</small><button class='button' type='submit'>Save currency settings</button></form></article></section>";
+        content = "<section class='manage-grid'><article class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></article><article class='manage-card'><h2>Share with Racinage Free</h2><p>Paste a link or text into the local chooser when the optional signed Windows Share Target identity is not installed.</p><a class='button ghost' href='/share'>Open share chooser</a></article><article class='manage-card'><h2>Currency localisation</h2><p>Finance Manager uses this account display currency. Rates are entered as the amount of each currency equal to 1 USD.</p><form method='post' action='/manage/settings'>"+CsrfInput()+"<input type='hidden' name='action' value='save_currency_settings'><label>Display currency<select name='display_currency'>"+options+"</select></label><label>Offline currency rates<textarea name='currency_rates' rows='8' spellcheck='false'>"+H(lines.ToString())+"</textarea></label><small>One per line: CODE | Name | rate. USD must remain 1.</small><button class='button' type='submit'>Save currency settings</button></form></article></section>";
       } else {
         Dictionary<string, object> connectedStatus = connected.Status();
         content = "<section class='manage-grid'><article class='manage-card'><h2>Local account</h2><p>One local user owns this device's family records. Collaborative members and invitations are intentionally unavailable.</p><a class='button ghost' href='/family'>Open dashboard</a></article><article class='manage-card'><h2>Connected messaging</h2><p>State: " + H(Convert.ToString(connectedStatus["state"], CultureInfo.InvariantCulture).Replace('_', ' ')) + ". Hosted password and two-factor authentication are handled only on racinage.com.</p><a class='button ghost' href='/messages'>Open Messages</a></article><article class='manage-card'><h2>Plan</h2><p>Lite Free limits apply to local features. Reviewed plugins can add Free features, while optional Pro features are purchased through the publisher's hosted Racinage page.</p><a class='button' href='" + PortablePaths.PricingUrl + "'>View Racinage plans</a></article></section>";
@@ -1018,6 +1041,7 @@ namespace RacinageFreeDesktop {
       Dictionary<string,string> financeInstall;if(installedBySlug.TryGetValue("finance-manager",out financeInstall)){bool financeEnabled=financeInstall["status"]=="enabled";cards.Append("<article class='plugin-card'><div class='plugin-card-top'><span class='plugin-mark'>F</span><div><h3>Finance Manager</h3><p class='plugin-meta'>1.4.0 - bundled</p></div></div><p>Multiple offline Personal, Family, and Group workspaces with transactions, budgets, goals, recurring records, reports, attachments, and circles.</p><div class='actions'>"+(financeEnabled?"<a class='button' href='/plugin/finance-manager'>Open</a>":"")+"<form class='plugin-action' method='post' action='/manage/plugins'>"+CsrfInput()+"<input type='hidden' name='action' value='"+(financeEnabled?"hide_plugin":"enable_plugin")+"'><input type='hidden' name='slug' value='finance-manager'><button class='button ghost' type='submit'>"+(financeEnabled?"Hide":"Enable")+"</button></form></div></article>");}
       try {
         List<PortablePluginInfo> plugins = pluginCatalog.GetPlugins();
+        store.RefreshInstalledShareContracts(plugins);
         foreach (PortablePluginInfo plugin in plugins) {
           if(String.Equals(plugin.slug,"finance-manager",StringComparison.OrdinalIgnoreCase))continue;
           Dictionary<string, string> current;
@@ -1091,7 +1115,15 @@ namespace RacinageFreeDesktop {
           result = ai.Status();
         } else if (slug == "kitchen-planner" && action == "local_ai_extract") {
           if (!store.PluginActionAllowed(slug, action)) throw new InvalidOperationException("This local plugin operation is not authorized.");
-          result = ai.ExtractKitchenRecipes(safePayload);
+          string extractionRun = store.BeginKitchenAiExtraction(safePayload);
+          try {
+            Dictionary<string, object> extracted = ai.ExtractKitchenRecipes(safePayload);
+            store.CompleteKitchenAiExtraction(extractionRun, extracted);
+            result = extracted;
+          } catch (Exception extractionError) {
+            store.FailKitchenAiExtraction(extractionRun, extractionError.Message);
+            throw;
+          }
         } else result = store.LocalPluginAction(slug, action, safePayload);
         WriteJson(context, json.Serialize(new Dictionary<string, object> { { "ok", true }, { "result", result } }), 200);
       } catch (Exception error) {
@@ -1145,7 +1177,7 @@ namespace RacinageFreeDesktop {
     private string Page(string title, string body) {
       string assetVersion = Uri.EscapeDataString(PortablePaths.Version);
       return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css?v=" + assetVersion + "'><style>" + Css() + CalendarCss() + "</style></head><body>" +
+        "<title>" + H(title) + " - Racinage Free</title><link rel='stylesheet' href='/assets/ai-assistant.css?v=" + assetVersion + "'><style>" + Css() + CalendarCss() + ShareCss() + "</style></head><body>" +
         "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/calendar'>Calendar</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
         "<main>" + body + "</main><script>" + PluginLifecycleJs() + CalendarJs() + Js() + connected.Script(store.CsrfToken) + "</script><script src='/assets/ai-assistant.js?v=" + assetVersion + "'></script></body></html>";
     }
@@ -1280,7 +1312,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
   internal sealed class PortableLocalSupport { public bool supported; public string reason; public string root; public string entrypoint; public string[] operations; }
   internal sealed class PortablePluginInfo {
     public string slug; public string name; public string name_fr; public string summary; public string summary_fr; public string description; public string description_fr; public string pricing_type; public int price_cents; public int? effective_price_cents; public string billing_interval; public string promotion_label; public string promotion_expires_at;
-    public string currency; public string version; public string checksum_sha256; public string download_url; public string purchase_url; public PortableLocalSupport local;
+    public string currency; public string version; public string checksum_sha256; public string download_url; public string purchase_url; public PortableLocalSupport local; public PortableShareActions share_actions;
   }
 
   internal sealed class PluginCatalogClient {
@@ -1389,7 +1421,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
     private static bool FixedHexEquals(string a, string b) { if (a == null || b == null || a.Length != b.Length) return false; int diff = 0; for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i]; return diff == 0; }
   }
 
-  internal sealed class LocalStore {
+  internal sealed partial class LocalStore {
     private static readonly byte[] TokenEntropy = Encoding.UTF8.GetBytes("Racinage Free local token v1");
     private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     private readonly string dbPath = Path.Combine(PortablePaths.DataDir, "racinage-free.sqlite");
@@ -1430,6 +1462,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
         db.Exec("CREATE TABLE IF NOT EXISTS media_deletes (relative_path TEXT PRIMARY KEY, deleted_at TEXT NOT NULL, origin_device TEXT NOT NULL)");
         db.Exec("CREATE TABLE IF NOT EXISTS plugin_installs (slug TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, checksum_sha256 TEXT NOT NULL, entrypoint TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'enabled', installed_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
         if (!HasColumn(db, "plugin_installs", "bridge_operations")) db.Exec("ALTER TABLE plugin_installs ADD COLUMN bridge_operations TEXT NOT NULL DEFAULT ''");
+        if (!HasColumn(db, "plugin_installs", "share_actions_json")) db.Exec("ALTER TABLE plugin_installs ADD COLUMN share_actions_json TEXT NOT NULL DEFAULT ''");
         if (!HasColumn(db, "users", "display_currency")) db.Exec("ALTER TABLE users ADD COLUMN display_currency TEXT NOT NULL DEFAULT 'USD'");
         db.Exec("CREATE TABLE IF NOT EXISTS local_currency_rates (code TEXT PRIMARY KEY, name TEXT NOT NULL, rate REAL NOT NULL CHECK(rate > 0), updated_at TEXT NOT NULL)");
         db.Exec("INSERT OR IGNORE INTO local_currency_rates(code,name,rate,updated_at)VALUES('USD','United States Dollar',1,'" + Now() + "')");
@@ -1438,6 +1471,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_attachments (slug TEXT NOT NULL,long_id TEXT NOT NULL,workspace_long_id TEXT NOT NULL,transaction_long_id TEXT NOT NULL,relative_path TEXT NOT NULL,original_name TEXT NOT NULL,mime_type TEXT NOT NULL,file_size INTEGER NOT NULL,version INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,long_id))");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_plugin_attachments ON local_plugin_attachments(slug,transaction_long_id,status)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_plugin_settings (slug TEXT NOT NULL,setting_key TEXT NOT NULL,setting_value TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(slug,setting_key))");
+        InitializeLocalShareSchema(db);
         db.Exec("CREATE TABLE IF NOT EXISTS local_calendar_items (long_id TEXT PRIMARY KEY,source_id TEXT NOT NULL DEFAULT 'core.calendar',source_opaque_id TEXT NOT NULL DEFAULT '',item_kind TEXT NOT NULL,title TEXT NOT NULL,start_utc TEXT NOT NULL DEFAULT '',end_utc TEXT NOT NULL DEFAULT '',date_value TEXT NOT NULL DEFAULT '',timezone TEXT NOT NULL DEFAULT 'UTC',all_day INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'planned',recurrence_json TEXT NOT NULL DEFAULT '',reminder_json TEXT NOT NULL DEFAULT '',color TEXT NOT NULL DEFAULT '#0f7370',notes TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_calendar_range ON local_calendar_items(status,date_value,start_utc)");
         db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_local_calendar_source ON local_calendar_items(source_id,source_opaque_id) WHERE source_opaque_id<>''");
@@ -1673,6 +1707,8 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
         if(action=="calendar_list")return KitchenCalendarList(payload);
         if(action=="safe_fetch")return KitchenSafeFetch(payload);
         if(action=="open_source_url")return KitchenOpenSourceUrl(payload);
+        if(action=="queue_source_import")return QueueKitchenSourceImport(slug,payload);
+        if(action=="retry_source_import")return RetryKitchenSourceImport(slug,payload);
         if(action=="local_ai_status")return KitchenLocalAiStatus();
         if(action=="kitchen_media_upload")return KitchenMediaUpload(slug,payload);
         if(action=="kitchen_media_get")return KitchenMediaGet(slug,payload);
@@ -1690,7 +1726,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
     private static string[] KnownPluginOperations(string slug){
       if(slug=="finance-manager")return new[]{"bootstrap","save","batch_save","delete","settings","attachment_upload","attachment_get","attachment_delete"};
       if(slug=="namegen")return new[]{"bootstrap","save_record","delete_record","save_setting","export_data","import_data"};
-      if(slug=="kitchen-planner")return new[]{"bootstrap","save_workspace","save_recipe","save_ingredient","save_pantry_movement","save_cooking_log","preview_cooking_deductions","save_plan","save_profile","save_favorite","save_shopping_list","save_reminder","save_taxonomy","delete_record","export_data","import_preview","import_execute","calendar_list","safe_fetch","open_source_url","local_ai_status","local_ai_extract","kitchen_media_upload","kitchen_media_get","kitchen_media_delete"};
+      if(slug=="kitchen-planner")return new[]{"bootstrap","save_workspace","save_recipe","save_ingredient","save_pantry_movement","save_cooking_log","preview_cooking_deductions","save_plan","save_profile","save_favorite","save_shopping_list","save_reminder","save_taxonomy","delete_record","export_data","import_preview","import_execute","calendar_list","safe_fetch","open_source_url","queue_source_import","retry_source_import","local_ai_status","local_ai_extract","kitchen_media_upload","kitchen_media_get","kitchen_media_delete"};
       return new string[0];
     }
 
@@ -1705,7 +1741,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
           if(row["record_type"]=="cooking_logs"){string recipe=GetString(data,"recipe_long_id");if(recipe!=""){if(!cookingCounts.ContainsKey(recipe))cookingCounts[recipe]=0;cookingCounts[recipe]++;}}
         }
         foreach(Dictionary<string,string> row in db.Query("SELECT long_id,workspace_long_id,transaction_long_id,original_name,mime_type,file_size,version,created_at FROM local_plugin_attachments WHERE slug=? AND status='active' ORDER BY created_at",slug))media.Add(new Dictionary<string,object>{{"long_id",row["long_id"]},{"workspace_long_id",row["workspace_long_id"]},{"recipe_long_id",row["transaction_long_id"]},{"original_name",row["original_name"]},{"mime_type",row["mime_type"]},{"file_size",ToLong(row["file_size"])},{"version",ToInt(row["version"])},{"created_at",row["created_at"]}});
-        return new Dictionary<string,object>{{"format","racinage-kitchen-planner"},{"version",1},{"offline",true},{"records",records},{"media",media},{"stock",stock},{"cooking_counts",cookingCounts},{"display_currency",GetDisplayCurrency()},{"ai",KitchenLocalAiStatus()}};
+        return new Dictionary<string,object>{{"format","racinage-kitchen-planner"},{"version",1},{"offline",true},{"records",records},{"media",media},{"stock",stock},{"cooking_counts",cookingCounts},{"imports",KitchenSourceImports(db,slug)},{"extraction_runs",KitchenExtractionRuns(db,slug)},{"display_currency",GetDisplayCurrency()},{"ai",KitchenLocalAiStatus()}};
       }
     }
 
@@ -2203,9 +2239,24 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
       using (SqliteDb db = Open()) {
         string now = Now();
         string[] known=KnownPluginOperations(plugin.slug),requested=plugin.local!=null&&plugin.local.operations!=null?plugin.local.operations:new string[0];string operations=String.Join(",",requested.Where(operation=>known.Contains(operation)).Distinct());if(plugin.slug=="finance-manager"&&operations=="")operations=String.Join(",",known);
-        db.Execute("INSERT OR REPLACE INTO plugin_installs (slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at,bridge_operations) VALUES (?,?,?,?,?,'enabled',COALESCE((SELECT installed_at FROM plugin_installs WHERE slug=?),?),?,?)", plugin.slug, plugin.name, plugin.version, plugin.checksum_sha256, entrypoint, plugin.slug, now, now,operations);
+        string shareActions=LocalShareContract.SerializeValidated(plugin.slug,plugin.share_actions);
+        db.Execute("INSERT OR REPLACE INTO plugin_installs (slug,name,version,checksum_sha256,entrypoint,status,installed_at,updated_at,bridge_operations,share_actions_json) VALUES (?,?,?,?,?,'enabled',COALESCE((SELECT installed_at FROM plugin_installs WHERE slug=?),?),?,?,?)", plugin.slug, plugin.name, plugin.version, plugin.checksum_sha256, entrypoint, plugin.slug, now, now,operations,shareActions);
       }
       ProtectDatabaseFile();
+    }
+
+    internal void RefreshInstalledShareContracts(List<PortablePluginInfo> plugins) {
+      if (plugins == null || plugins.Count == 0) return;
+      bool changed = false;
+      using (SqliteDb db = Open()) {
+        foreach (PortablePluginInfo plugin in plugins) {
+          if (plugin == null || !PluginCatalogClient.ValidSlug(plugin.slug) || String.IsNullOrWhiteSpace(plugin.checksum_sha256)) continue;
+          string contract = LocalShareContract.SerializeValidated(plugin.slug, plugin.share_actions);
+          int count = db.Execute("UPDATE plugin_installs SET share_actions_json=?,updated_at=? WHERE slug=? AND version=? AND checksum_sha256=? AND share_actions_json!=?", contract, Now(), plugin.slug, plugin.version, plugin.checksum_sha256, contract);
+          changed = changed || count > 0;
+        }
+      }
+      if (changed) ProtectDatabaseFile();
     }
 
     internal List<Dictionary<string, string> > GetInstalledPlugins() {
