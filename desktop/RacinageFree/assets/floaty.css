@@ -1,0 +1,38 @@
+#header { z-index: 70; }
+#racinage_floaty_shell { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+.local-floaty { position: absolute; left: 0; top: 0; display: grid; grid-template-rows: 44px minmax(0, 1fr); width: var(--floaty-width, 360px); height: var(--floaty-height, 420px); max-width: calc(100vw - 16px); max-height: calc(100vh - 74px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface, #fff); color: var(--text); overflow: hidden; pointer-events: auto; }
+.local-floaty.is-minimized { width: min(300px, calc(100vw - 16px)); height: 44px; }
+.local-floaty > header { position: static; display: flex; align-items: center; justify-content: space-between; width: auto; height: 44px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); background: var(--surface-soft, #f5f9fa); cursor: grab; touch-action: none; }
+.local-floaty > header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--brand); }
+.local-floaty > header div { display: flex; gap: 2px; }
+.local-floaty > header button { width: 38px; height: 38px; border: 0; border-radius: 7px; background: transparent; color: var(--brand); }
+.local-floaty-body { min-height: 0; overflow: auto; padding: 12px; }
+.local-floaty-item + .local-floaty-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.local-floaty-item h3 { margin: 0 0 10px; color: var(--brand); font-size: 17px; }
+.local-floaty-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.local-floaty-metrics span { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; }
+.local-floaty-metrics strong { color: var(--brand); font-size: 12px; overflow-wrap: anywhere; }
+.local-floaty-progress { height: 7px; margin: 10px 0; border-radius: 99px; background: var(--line); overflow: hidden; }
+.local-floaty-progress span { display: block; height: 100%; background: var(--good); }
+.local-floaty details { border-top: 1px solid var(--line); }
+.local-floaty summary { min-height: 40px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+.local-floaty-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.local-floaty-list li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.local-floaty-resize { position: absolute; width: 22px; height: 22px; touch-action: none; }
+.local-floaty-resize.is-nw { left: 0; top: 0; cursor: nwse-resize; }
+.local-floaty-resize.is-ne { right: 0; top: 0; cursor: nesw-resize; }
+.local-floaty-resize.is-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.local-floaty-resize.is-se { right: 0; bottom: 0; cursor: nwse-resize; }
+.local-floaty-resize::after { content: ""; position: absolute; width: 9px; height: 9px; border-color: var(--muted); }
+.local-floaty-resize.is-nw::after { left: 4px; top: 4px; border-left: 2px solid; border-top: 2px solid; }
+.local-floaty-resize.is-ne::after { right: 4px; top: 4px; border-right: 2px solid; border-top: 2px solid; }
+.local-floaty-resize.is-sw::after { left: 4px; bottom: 4px; border-left: 2px solid; border-bottom: 2px solid; }
+.local-floaty-resize.is-se::after { right: 4px; bottom: 4px; border-right: 2px solid; border-bottom: 2px solid; }
+.local-floaty-tray { position: fixed; right: 18px; bottom: 72px; width: 46px; height: 46px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 12px; background: var(--surface, #fff); color: var(--brand); pointer-events: auto; }
+.local-floaty-tray svg { width: 22px; height: 22px; fill: currentColor; }
+.local-floaty-chooser { width: min(460px, calc(100vw - 28px)); border: 1px solid var(--line); border-radius: 12px; background: var(--surface, #fff); color: var(--text); padding: 18px; pointer-events: auto; }
+.local-floaty-chooser::backdrop { background: rgb(5 30 34 / 58%); }
+.local-floaty-chooser form { display: grid; gap: 12px; }
+.local-floaty-chooser footer { display: flex; justify-content: flex-end; gap: 8px; }
+@media (pointer: coarse), (max-width: 760px) { .local-floaty-resize { width: 44px; height: 44px; } .local-floaty > header button { width: 44px; height: 44px; } .local-floaty-metrics { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .local-floaty { scroll-behavior: auto; } }

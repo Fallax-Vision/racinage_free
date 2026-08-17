@@ -44,17 +44,34 @@ function Invoke-RacinageSignature {
   param([Parameter(Mandatory = $true)][string]$File)
   if ($Development) { return }
   $arguments = @('sign', '/fd', 'SHA256', '/td', 'SHA256', '/tr', $timestampUrl)
+  $temporaryCertificate = $null
   if (![string]::IsNullOrWhiteSpace($signingCertificate)) {
-    $arguments += @('/f', $signingCertificate)
-    if (![string]::IsNullOrWhiteSpace($signingPassword)) { $arguments += @('/p', $signingPassword) }
+    $importArguments = @{
+      FilePath = $signingCertificate
+      CertStoreLocation = 'Cert:\CurrentUser\My'
+    }
+    if (![string]::IsNullOrWhiteSpace($signingPassword)) {
+      $importArguments.Password = ConvertTo-SecureString -String $signingPassword -AsPlainText -Force
+    }
+    $temporaryCertificate = Import-PfxCertificate @importArguments
+    if (!$temporaryCertificate -or [string]::IsNullOrWhiteSpace($temporaryCertificate.Thumbprint)) {
+      throw 'The Windows code-signing certificate could not be imported securely.'
+    }
+    $arguments += @('/sha1', $temporaryCertificate.Thumbprint)
   } else {
     $arguments += @('/sha1', $signingThumbprint)
   }
   $arguments += $File
-  & $signTool @arguments
-  if ($LASTEXITCODE -ne 0) { throw 'Windows code signing failed.' }
-  & $signTool verify /pa /all $File
-  if ($LASTEXITCODE -ne 0) { throw 'Windows signature verification failed.' }
+  try {
+    & $signTool @arguments
+    if ($LASTEXITCODE -ne 0) { throw 'Windows code signing failed.' }
+    & $signTool verify /pa /all $File
+    if ($LASTEXITCODE -ne 0) { throw 'Windows signature verification failed.' }
+  } finally {
+    if ($temporaryCertificate) {
+      Remove-Item -LiteralPath (Join-Path 'Cert:\CurrentUser\My' $temporaryCertificate.Thumbprint) -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -72,7 +89,7 @@ $formsDll = Join-Path $webViewRoot 'lib\net462\Microsoft.Web.WebView2.WinForms.d
 $loaderDll = Join-Path $webViewRoot 'runtimes\win-x64\native\WebView2Loader.dll'
 $sqliteDll = Join-Path $nugetRoot 'sqlitepclraw.lib.e_sqlite3\2.1.6\runtimes\win-x64\native\e_sqlite3.dll'
 
-foreach ($required in @($coreDll, $formsDll, $loaderDll, $sqliteDll, $iconFile, (Join-Path $fontRoot 'InterVariable.woff2'), (Join-Path $fontRoot 'InterVariable-Italic.woff2'), (Join-Path $aiAssetRoot 'ai-assistant.css'), (Join-Path $aiAssetRoot 'ai-assistant.js'), (Join-Path $portablePluginRoot 'index.html'), (Join-Path $portablePluginRoot 'app.css'), (Join-Path $portablePluginRoot 'app.js'))) {
+foreach ($required in @($coreDll, $formsDll, $loaderDll, $sqliteDll, $iconFile, (Join-Path $fontRoot 'InterVariable.woff2'), (Join-Path $fontRoot 'InterVariable-Italic.woff2'), (Join-Path $aiAssetRoot 'ai-assistant.css'), (Join-Path $aiAssetRoot 'ai-assistant.js'), (Join-Path $aiAssetRoot 'floaty.css'), (Join-Path $aiAssetRoot 'floaty.js'), (Join-Path $portablePluginRoot 'index.html'), (Join-Path $portablePluginRoot 'app.css'), (Join-Path $portablePluginRoot 'app.js'))) {
   if (!(Test-Path -LiteralPath $required)) {
     throw "Missing build dependency: $required"
   }
@@ -93,7 +110,7 @@ New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
   /win32icon:$iconFile `
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll `
   /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
-  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'ShareCore.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
+  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'ShareCore.cs') (Join-Path $nativeRoot 'FloatyCore.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $hostExe)) {
   throw 'The Racinage Free native host did not compile.'
 }
@@ -106,6 +123,8 @@ Copy-Item -LiteralPath $sqliteDll -Destination $stagingRoot -Force
 New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'assets') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'ai-assistant.css') -Destination (Join-Path $stagingRoot 'assets') -Force
 Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'ai-assistant.js') -Destination (Join-Path $stagingRoot 'assets') -Force
+Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'floaty.css') -Destination (Join-Path $stagingRoot 'assets') -Force
+Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'floaty.js') -Destination (Join-Path $stagingRoot 'assets') -Force
 New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'fonts\inter') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force
 Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable-Italic.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force

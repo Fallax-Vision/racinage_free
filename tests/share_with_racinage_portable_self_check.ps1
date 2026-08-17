@@ -3,12 +3,24 @@ $repo = Resolve-Path (Join-Path $PSScriptRoot '..')
 $desktop = Join-Path $repo 'desktop\RacinageFree'
 $program = Join-Path $desktop 'native-host\Program.cs'
 $share = Join-Path $desktop 'native-host\ShareCore.cs'
+$floaty = Join-Path $desktop 'native-host\FloatyCore.cs'
+$floatyMigration = Join-Path $desktop 'database\2026_08_16_local_floaty_quick_expenses.sql'
 $manifestTemplate = Join-Path $desktop 'sparse-package\AppxManifest.xml.template'
 $migration = Join-Path $desktop 'database\2026_08_15_local_share_actions.sql'
 
-foreach ($required in @($program, $share, $manifestTemplate, $migration, (Join-Path $desktop 'share-target\Program.cs'))) {
+foreach ($required in @($program, $share, $floaty, $floatyMigration, $manifestTemplate, $migration, (Join-Path $desktop 'share-target\Program.cs'))) {
   if (!(Test-Path -LiteralPath $required)) { throw "Missing Share with Racinage source: $required" }
 }
+
+$floatySql = Get-Content -Raw -LiteralPath $floatyMigration
+foreach ($table in @('local_floaty_windows', 'local_floaty_items')) {
+  if ($floatySql -notmatch [Regex]::Escape($table)) { throw "Floaty migration is missing $table." }
+}
+$programSource = Get-Content -Raw -LiteralPath $program
+foreach ($recordType in @('quick_expenses', 'quick_expense_entries', 'quick_expense_postings')) {
+  if ($programSource -notmatch $recordType) { throw "Finance Manager is missing $recordType support." }
+}
+if ($programSource -notmatch 'post_quick_expense' -or $programSource -notmatch 'BEGIN IMMEDIATE') { throw 'Quick Expense posting is not routed through the typed transactional operation.' }
 
 [xml]$manifest = (Get-Content -Raw -LiteralPath $manifestTemplate).Replace('__PUBLISHER__', 'CN=Self Check')
 $ns = New-Object Xml.XmlNamespaceManager($manifest.NameTable)
@@ -37,7 +49,7 @@ try {
   & $csc /nologo /target:exe /platform:x64 /main:ShareCoreSelfCheck /out:$output `
     /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll `
     /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
-    /reference:$core /reference:$forms $program $share (Join-Path $desktop 'native-host\AiCompanion.cs') (Join-Path $desktop 'native-host\ConnectedMessaging.cs') (Join-Path $PSScriptRoot 'ShareCoreSelfCheck.cs')
+    /reference:$core /reference:$forms $program $share $floaty (Join-Path $desktop 'native-host\AiCompanion.cs') (Join-Path $desktop 'native-host\ConnectedMessaging.cs') (Join-Path $PSScriptRoot 'ShareCoreSelfCheck.cs')
   if ($LASTEXITCODE -ne 0) { throw 'The portable Share Core sources did not compile.' }
   Copy-Item -LiteralPath $core -Destination $temp
   Copy-Item -LiteralPath $forms -Destination $temp

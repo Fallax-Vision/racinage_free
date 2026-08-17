@@ -20,7 +20,7 @@
   let importRows = [];
   const workspaceGroups = {
     overview: ["overview"],
-    transactions: ["transactions", "recurring", "taxonomy"],
+    transactions: ["transactions", "quick_expenses", "recurring", "taxonomy"],
     planning: ["budgets", "goals", "forecast"],
     assets: ["accounts", "debts", "investments"],
     reports: ["reports"],
@@ -28,7 +28,7 @@
     settings: ["settings"]
   };
   const workspaceGroupLabels = { overview: "Overview", transactions: "Transactions", planning: "Planning", assets: "Assets & Debt", reports: "Reports", people: "People", settings: "Settings" };
-  const panelLabels = { transactions: "Activity", recurring: "Recurring & subscriptions", taxonomy: "Categories & tags", budgets: "Budgets", goals: "Goals", forecast: "Forecast", accounts: "Accounts", debts: "Debts", investments: "Investments", circles: "Circles" };
+  const panelLabels = { transactions: "Activity", quick_expenses: "Quick Expenses", recurring: "Recurring & subscriptions", taxonomy: "Categories & tags", budgets: "Budgets", goals: "Goals", forecast: "Forecast", accounts: "Accounts", debts: "Debts", investments: "Investments", circles: "Circles" };
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const id = prefix => `${prefix}_${crypto.getRandomValues(new Uint32Array(4)).join("")}`;
@@ -161,7 +161,7 @@
     }
   };
   const accountOptions = () => byType("accounts").filter(row => !data(row).external).map(row => ({ value: row.long_id, label: `${data(row).name} (${data(row).native_currency_code})` }));
-  const categoryOptions = (blank = true) => byType("categories").filter(row => !data(row).archived).map(row => ({ value: row.long_id, label: `${data(row).name} - ${data(row).category_type}` }));
+  const categoryOptions = kind => byType("categories").filter(row => !data(row).archived && (typeof kind !== "string" || !kind || data(row).category_type === kind)).map(row => ({ value: row.long_id, label: `${data(row).name} - ${data(row).category_type}` }));
   const recordConfigs = {
     accounts: {
       title: "Account",
@@ -420,6 +420,15 @@
       const snap = snapshot(cents(values.value), data(circle).native_currency_code);
       return { ...values, amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(circle).native_currency_code };
     }
+    if (recordType === "quick_expenses") {
+      const workspace = find("workspaces", workspaceId), code = data(workspace).native_currency_code || "USD", snap = snapshot(cents(values.starting_amount), code);
+      return { ...existing, ...values, starting_cents: snap.native_cents, starting_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: code, quick_status: values.quick_status || existing?.quick_status || "active" };
+    }
+    if (recordType === "quick_expense_entries") {
+      const quick = find("quick_expenses", values.quick_expense); if (!quick) throw new Error("Choose a Quick Expense.");
+      const snap = snapshot(cents(values.value), data(quick).native_currency_code);
+      return { ...existing, ...values, amount_cents: snap.native_cents, amount_usd_cents: snap.usd_cents, fx_rate: snap.fx_rate, native_currency_code: data(quick).native_currency_code, tags: normalizeTagNames(values.tags) };
+    }
     if (recordType === "categories") return { ...values, archived: false };
     if (recordType === "tags") return { ...values, normalized_name: String(values.name || "").trim().toLocaleLowerCase(), archived: false };
     return { ...existing, ...values };
@@ -474,6 +483,7 @@
       overview: renderOverview,
       accounts: renderAccounts,
       transactions: renderTransactions,
+      quick_expenses: renderQuickExpenses,
       recurring: renderRecurring,
       taxonomy: renderTaxonomy,
       budgets: renderBudgets,
@@ -519,6 +529,21 @@
     rows.sort((a, b) => sort === "date_asc" ? String(data(a).transaction_date).localeCompare(String(data(b).transaction_date)) : sort === "amount_desc" ? Number(data(b).amount_usd_cents) - Number(data(a).amount_usd_cents) : sort === "amount_asc" ? Number(data(a).amount_usd_cents) - Number(data(b).amount_usd_cents) : sort === "payee" ? String(data(a).payee).localeCompare(String(data(b).payee)) : String(data(b).transaction_date).localeCompare(String(data(a).transaction_date)));
     mount.innerHTML = `<header class="panel-head"><div><h2>Activity</h2><p>Income, expenses, withdrawals, deposits, and balanced transfers.</p></div><div class="panel-actions"><button class="ghost" type="button" data-import>Import</button><button class="ghost" type="button" data-reconcile>Reconcile</button><button class="primary" type="button" data-new="transactions">Add transaction</button></div></header>${periodControl()}<div class="filters"><input type="search" data-filter-search placeholder="Search" value="${esc(search)}"><select data-filter-status>${optionHtml([{ value: "", label: "All statuses" }, "pending", "cleared", "reconciled"], status)}</select><select data-filter-tag>${optionHtml([{ value: "", label: "All tags" }, ...byType("tags").filter(row => !data(row).archived).map(row => ({ value: data(row).name, label: data(row).name }))], tag)}</select><select data-filter-sort>${optionHtml([{ value: "date_desc", label: "Newest first" }, { value: "date_asc", label: "Oldest first" }, { value: "amount_desc", label: "Amount high to low" }, { value: "amount_asc", label: "Amount low to high" }, { value: "payee", label: "Payee A-Z" }], sort)}</select></div>${transactionTable(rows)}`;
     mount.dataset.search = search; mount.dataset.status = status; mount.dataset.tag = tag; mount.dataset.sort = sort;
+  };
+
+  const quickExpenseTotals = row => {
+    const entries = byType("quick_expense_entries").filter(item => data(item).quick_expense === row.long_id), spent = entries.reduce((sum, item) => sum + Number(data(item).amount_usd_cents || 0), 0);
+    return { entries, spent, remaining: Number(data(row).starting_usd_cents || 0) - spent };
+  };
+  const quickExpenseView = row => {
+    const totals = quickExpenseTotals(row), starting = Number(data(row).starting_usd_cents || 0), percent = starting > 0 ? Math.min(100, Math.round(totals.spent / starting * 100)) : 0;
+    return { title: data(row).name, status: data(row).quick_status, starting: money(starting), spent: money(totals.spent), remaining: money(totals.remaining), progress: percent, entries: totals.entries.slice().sort((a,b) => String(data(b).occurred_at).localeCompare(String(data(a).occurred_at))).slice(0,8).map(item => ({ label: data(item).label, value: money(data(item).amount_usd_cents), date: new Date(data(item).occurred_at).toLocaleString("en-GB") })) };
+  };
+  const floatyMessage = payload => parent.postMessage({ ...payload, slug: "finance-manager", bridgeToken: window.FINANCE_BRIDGE_TOKEN }, "*");
+  const syncQuickExpenseFloaty = row => { if(row)floatyMessage({floatyUpdate:true,provider:"finance-manager",recordType:"quick_expense",recordId:row.long_id,view:quickExpenseView(row)}); };
+  const renderQuickExpenses = mount => {
+    const rows = byType("quick_expenses").sort((a,b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    mount.innerHTML = `<header class="panel-head"><div><h2>Quick Expenses</h2><p>Track temporary spending pools without changing accounts or reports until you explicitly post them.</p></div><button class="primary" type="button" data-new="quick_expenses">New Quick Expense</button></header><div class="quick-grid">${rows.map(row => { const item=data(row), totals=quickExpenseTotals(row), percent=Number(item.starting_usd_cents)>0?Math.min(100,Math.round(totals.spent/Number(item.starting_usd_cents)*100)):0; return `<article class="quick-card"><header><div><span class="type-badge">${esc(item.quick_status)}</span><h3>${esc(item.name)}</h3></div><button class="floaty-button" type="button" data-open-floaty="${esc(row.long_id)}" aria-label="Open ${esc(item.name)} in Floaty">▣ Floaty</button></header><div class="quick-metrics"><span>Starting<strong>${esc(money(item.starting_usd_cents))}</strong></span><span>Spent<strong>${esc(money(totals.spent))}</strong></span><span>Remaining<strong class="${totals.remaining<0?'negative':'positive'}">${esc(money(totals.remaining))}</strong></span></div><div class="bar"><span style="width:${percent}%"></span></div><section class="quick-recent"><h4>Recent expenses</h4>${totals.entries.slice(-4).reverse().map(entry=>`<p><span>${esc(data(entry).label)}</span><strong>${esc(money(data(entry).amount_usd_cents))}</strong></p>`).join('')||'<p>No expenses yet.</p>'}</section><footer><button class="primary" type="button" data-add-quick-entry="${esc(row.long_id)}" ${item.quick_status!=='active'?'disabled':''}>Record expense</button><button class="ghost" type="button" data-edit="quick_expenses" data-id="${esc(row.long_id)}">Edit</button><button class="ghost" type="button" data-settle-quick="${esc(row.long_id)}">${item.quick_status==='active'?'Mark settled':'Reopen'}</button><button class="ghost" type="button" data-post-quick="${esc(row.long_id)}">Post</button></footer></article>`; }).join('')||'<div class="empty"><h3>Start a temporary spending pool</h3><p>The derived remaining amount updates after every expense.</p></div>'}</div>`;
   };
 
   const renderGeneric = (type, mount = document.getElementById("workspacePanel")) => {
@@ -676,12 +701,18 @@
     ]
   };
   recordConfigs.workspaces = workspaceConfig;
+  recordConfigs.quick_expenses = { title: "Quick Expense", fields: [field("name","Name","text",{required:true,maxlength:160}),field("starting_amount","Starting amount","money",{required:true,min:0}),field("quick_status","Status","select",{options:["active","settled","archived"]})] };
+  recordConfigs.quick_expense_entries = { title: "Quick expense entry", fields: [field("quick_expense","Quick Expense","dynamic",{options:()=>byType("quick_expenses").map(row=>({value:row.long_id,label:data(row).name}))}),field("value","Amount","money",{required:true,min:.01}),field("label","Label","text",{required:true,maxlength:190}),field("occurred_at","Date and time","datetime-local",{required:true,value:new Date().toISOString().slice(0,16)}),field("category","Category","dynamic",{options:categoryOptions,blank:"Uncategorized"}),field("tags","Tags","text",{maxlength:500}),field("note","Note","textarea",{wide:true,maxlength:2000})] };
 
   const formRecordSave = async event => {
     event.preventDefault();
     if (!activeEditor) return;
     const values = editorValues(), { recordType, row } = activeEditor;
     try {
+      if(recordType==="quick_expense_entries"){
+        const quick=find("quick_expenses",values.quick_expense),previous=row?Number(data(row).amount_usd_cents||0):0,next=snapshot(cents(values.value),data(quick).native_currency_code).usd_cents,remaining=quickExpenseTotals(quick).remaining+previous-next;
+        if(remaining<0&&!confirm("This expense makes the remaining amount negative. Continue?"))return;
+      }
       if (recordType === "workspaces") {
         const recordData = { ...data(row), ...values, workspace_kind: ["personal", "family", "group"].includes(values.workspace_kind) ? values.workspace_kind : "personal", include_home: values.include_home === "1", hide_balances: values.hide_balances === "1", sample: values.sample === "1" };
         await save("workspaces", recordData, { long_id: row?.long_id || "", workspace_long_id: "" });
@@ -712,6 +743,8 @@
         await save(recordType, normalized, { long_id: row?.long_id || "" });
         if (["transactions", "recurring_rules"].includes(recordType)) await ensureTags(normalized.tags);
       }
+      if(recordType==="quick_expense_entries")syncQuickExpenseFloaty(find("quick_expenses",values.quick_expense));
+      if(recordType==="quick_expenses")syncQuickExpenseFloaty(find("quick_expenses",row?.long_id));
       dialog.close();
       notify("Saved locally.");
       render();
@@ -797,7 +830,7 @@
     const sourceWorkspace = data(backup.workspace), restoredWorkspace = { ...sourceWorkspace, name: `${sourceWorkspace.name || "Restored workspace"} - restored`, workspace_kind: ["personal", "family", "group"].includes(sourceWorkspace.workspace_kind) ? sourceWorkspace.workspace_kind : "personal", sample: false };
     const workspaceResult = await save("workspaces", restoredWorkspace, { workspace_long_id: "" }), newWorkspace = workspaceResult.long_id, idMap = new Map(), categoryMap = new Map();
     workspaceId = newWorkspace; panel = "overview";
-    const records = backup.records.filter(row => row && typeof row === "object"), order = ["categories", "tags", "accounts", "goals", "budgets", "debts", "investments", "scenarios", "circles", "circle_members", "recurring_rules", "transactions", "debt_payments", "circle_entries"];
+    const records = backup.records.filter(row => row && typeof row === "object"), order = ["categories", "tags", "accounts", "goals", "budgets", "debts", "investments", "scenarios", "circles", "circle_members", "quick_expenses", "recurring_rules", "transactions", "quick_expense_entries", "quick_expense_postings", "debt_payments", "circle_entries"];
     const mapReference = value => idMap.get(String(value || "")) || String(value || "");
     const ensureLegacyCategory = async (value, type) => {
       const source = String(value || ""); if (!source) return ""; if (idMap.has(source)) return idMap.get(source);
@@ -806,7 +839,7 @@
     };
     for (const type of order) for (const row of records.filter(item => item.record_type === type)) {
       const item = { ...data(row) };
-      for (const field of ["account", "destination_account", "goal", "debt", "circle", "member"]) if (item[field]) item[field] = mapReference(item[field]);
+      for (const field of ["account", "destination_account", "goal", "debt", "circle", "member", "quick_expense", "transaction"]) if (item[field]) item[field] = mapReference(item[field]);
       if (type === "categories") item.parent = idMap.get(String(item.parent || "")) || "";
       if (type === "transactions") {
         item.splits = await Promise.all((item.splits || []).map(async split => { const category = await ensureLegacyCategory(split.category, item.transaction_type === "income" ? "income" : "expense"); return { ...split, category, category_name: data(find("categories", category)).name || split.category_name || "" }; }));
@@ -958,6 +991,16 @@
     if (panelButton) { panel = panelButton.dataset.panel; render(); return; }
     const newButton = event.target.closest("[data-new]");
     if (newButton) { openEditor(newButton.dataset.new); return; }
+    const addQuickEntry=event.target.closest("[data-add-quick-entry]");
+    if(addQuickEntry){openEditor("quick_expense_entries",null,{quick_expense:addQuickEntry.dataset.addQuickEntry,occurred_at:new Date().toISOString().slice(0,16)});return;}
+    const floatyButton=event.target.closest("[data-open-floaty]");
+    if(floatyButton){const row=find("quick_expenses",floatyButton.dataset.openFloaty);floatyMessage({floatyOpen:true,provider:"finance-manager",recordType:"quick_expense",recordId:row.long_id,title:data(row).name,view:quickExpenseView(row),scope:"all_pages"});notify("Opened in Floaty.");return;}
+    const settleQuick=event.target.closest("[data-settle-quick]");
+    if(settleQuick){try{const row=find("quick_expenses",settleQuick.dataset.settleQuick);await save("quick_expenses",{...data(row),quick_status:data(row).quick_status==="active"?"settled":"active"},{long_id:row.long_id});syncQuickExpenseFloaty(find("quick_expenses",row.long_id));notify("Quick Expense status updated.");render();}catch(error){notify(error.message,false);}return;}
+    const postQuick=event.target.closest("[data-post-quick]");
+    if(postQuick){
+      try{const quick=find("quick_expenses",postQuick.dataset.postQuick),totals=quickExpenseTotals(quick),accounts=accountOptions(),categories=categoryOptions("expense");if(!totals.entries.length)throw new Error("Record an expense first.");if(!accounts.length)throw new Error("Add an account first.");if(!categories.length)throw new Error("Add an expense category first.");const accountId=prompt(`Destination account ID:\n${accounts.map(item=>`${item.label}: ${item.value}`).join("\n")}`,accounts[0].value);if(!accountId)return;if(!find("accounts",accountId))throw new Error("Choose an available account.");const categoryId=prompt(`Expense category ID:\n${categories.map(item=>`${item.label}: ${item.value}`).join("\n")}`,categories[0].value);if(!categoryId)return;if(!find("categories",categoryId))throw new Error("Choose an available expense category.");const postingDate=prompt("Posting date (YYYY-MM-DD)",today());if(!/^\d{4}-\d{2}-\d{2}$/.test(postingDate||""))throw new Error("Choose a valid posting date.");postQuick.disabled=true;await bridge("post_quick_expense",{quick_expense:quick.long_id,account:accountId,category:categoryId,posting_date:postingDate,source_version:Number(quick.version||1),idempotency_key:crypto.randomUUID?.()||`quick_${Date.now()}_${Math.random().toString(16).slice(2)}`});await reload();notify("Quick Expense posted as a permanent transaction snapshot.");render();}catch(error){notify(error.message,false);postQuick.disabled=false;}return;
+    }
     const editButton = event.target.closest("[data-edit]");
     if (editButton) { openEditor(editButton.dataset.edit, find(editButton.dataset.edit, editButton.dataset.id)); return; }
     const deleteButton = event.target.closest("[data-delete]");
@@ -968,6 +1011,9 @@
         if (deleteButton.dataset.delete === "transactions" && data(row).transfer_group) {
           const pair = byType("transactions").filter(item => data(item).transfer_group === data(row).transfer_group);
           for (const item of pair) await remove("transactions", item.long_id);
+        } else if(deleteButton.dataset.delete==="quick_expenses"){
+          for(const entry of byType("quick_expense_entries").filter(item=>data(item).quick_expense===deleteButton.dataset.id))await remove("quick_expense_entries",entry.long_id);
+          await remove("quick_expenses",deleteButton.dataset.id);
         } else await remove(deleteButton.dataset.delete, deleteButton.dataset.id);
         if (deleteButton.dataset.delete === "workspaces") workspaceId = "";
         notify(["categories", "tags"].includes(deleteButton.dataset.delete) ? "Archived locally. Referenced records were preserved." : "Deleted locally."); render();

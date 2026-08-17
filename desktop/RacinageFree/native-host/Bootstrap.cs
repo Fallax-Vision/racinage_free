@@ -39,7 +39,7 @@ namespace RacinageFreeBootstrap {
         }
 
         string payloadHash = ComputeHash(payloadBytes);
-        bool installed = File.Exists(executable);
+        bool installed = File.Exists(executable) && VerifyInstalledPayload(application, payloadBytes);
         string installedHash = installed && File.Exists(stamp) ? File.ReadAllText(stamp).Trim() : "";
         if (!installed || installedHash != payloadHash) {
           if (Directory.Exists(installing)) DeleteDirectoryWithRetry(installing, root);
@@ -55,6 +55,10 @@ namespace RacinageFreeBootstrap {
           Directory.Move(installing, application);
           File.WriteAllText(stamp, payloadHash);
           ClearWebViewCache(root);
+        }
+
+        if (!VerifyInstalledPayload(application, payloadBytes)) {
+          throw new InvalidOperationException("The installed application payload failed integrity verification.");
         }
 
         RemoveOtherVersions(root, application);
@@ -230,6 +234,35 @@ namespace RacinageFreeBootstrap {
     private static string ComputeHash(byte[] data) {
       using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create()) {
         return BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+      }
+    }
+
+    private static string ComputeHash(Stream data) {
+      using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create()) {
+        return BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+      }
+    }
+
+    private static bool VerifyInstalledPayload(string application, byte[] payloadBytes) {
+      try {
+        string applicationRoot = Path.GetFullPath(application).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        using (MemoryStream source = new MemoryStream(payloadBytes, false))
+        using (ZipArchive archive = new ZipArchive(source, ZipArchiveMode.Read)) {
+          foreach (ZipArchiveEntry entry in archive.Entries) {
+            if (String.IsNullOrEmpty(entry.Name)) continue;
+            string target = Path.GetFullPath(Path.Combine(application, entry.FullName));
+            if (!target.StartsWith(applicationRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(target)) return false;
+            FileInfo file = new FileInfo(target);
+            if (file.Length != entry.Length) return false;
+            using (Stream expected = entry.Open())
+            using (Stream actual = File.OpenRead(target)) {
+              if (!String.Equals(ComputeHash(expected), ComputeHash(actual), StringComparison.Ordinal)) return false;
+            }
+          }
+        }
+        return true;
+      } catch {
+        return false;
       }
     }
   }

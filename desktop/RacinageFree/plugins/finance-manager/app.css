@@ -151,6 +151,19 @@ dialog h2 { margin: 3px 0 0; color: var(--brand); }
 .chart-row { display: grid; grid-template-columns: minmax(110px, 1fr) 3fr auto; align-items: center; gap: 8px; }
 .chart-row .bar { margin: 0; }
 .attachment-list { display: grid; gap: 5px; margin-top: 6px; }
+.quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.quick-card { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.quick-card > header, .quick-card > footer, .quick-recent p { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.quick-card h3 { margin: 5px 0 0; color: var(--brand); font-size: 18px; }
+.quick-card > footer { justify-content: flex-start; flex-wrap: wrap; }
+.quick-card > footer button { min-height: 39px; }
+.quick-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.quick-metrics > span { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; }
+.quick-metrics strong { color: var(--brand); font-size: 14px; }
+.quick-recent h4 { margin: 0 0 5px; color: var(--brand); }
+.quick-recent p { margin: 0; padding: 7px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+.quick-recent p:last-child { border-bottom: 0; }
+.floaty-button { min-height: 39px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--brand); font-weight: 600; }
 .workspace-subtabs { display: flex; gap: 6px; overflow-x: auto; margin: -5px 0 12px; padding: 3px 0; }
 .workspace-subtabs button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-weight: 500; white-space: nowrap; }
 .workspace-subtabs button.active { border-color: var(--brand); background: var(--surface-soft); color: var(--brand); font-weight: 600; }
@@ -211,6 +224,7 @@ dialog h2 { margin: 3px 0 0; color: var(--brand); }
   .top-tabs, .workspace-tabs { display: none; }
   .mobile-nav, .workspace-mobile-nav { display: grid; }
   .filters, .form-grid, .import-map, .overview-grid, .taxonomy-grid, .split-line { grid-template-columns: 1fr; }
+  .quick-grid, .quick-metrics { grid-template-columns: 1fr; }
   .period-control { align-items: stretch; flex-direction: column; }
   .period-control label { min-width: 0; }
   .suggestions article { align-items: stretch; flex-direction: column; }
