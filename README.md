@@ -21,6 +21,7 @@ The source tree is now `v0.17.0`. It includes an optional local AI assistant for
 - Borderless native C# WinForms/WebView2 host with one custom app bar.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- Private offline Progress analytics with local levels, weekly consistency, badges, and optional static interface accents. See [Progress in Racinage Free](docs/progress.md).
 - Optional hosted messaging connection through browser-based device authorization. Password and two-factor authentication are entered only on `racinage.com`.
 - Windows DPAPI-protected hosted tokens, an encrypted local message cache, an encrypted ordered offline outbox, resumable file uploads, event-stream recovery, and explicit reconnect conflict reporting.
 - First-class Ollama, LM Studio, and custom local OpenAI-compatible setup, model discovery, capability testing, streaming chat, and typed local change previews.
@@ -77,7 +78,7 @@ Racinage Free keeps mutable data outside the executable:
 %LOCALAPPDATA%\Racinage Free\connected
 ```
 
-Refreshing or rebuilding the same version preserves local data. Portable AI never synchronizes or exposes the local SQLite database to hosted Racinage. Connected messaging synchronizes only the hosted conversations and files authorized for the connected account; it never uploads the local family database.
+Refreshing or rebuilding the same version preserves local data. Portable AI and Progress never synchronize or expose the local SQLite database to hosted Racinage. Connected messaging synchronizes only the hosted conversations and files authorized for the connected account; it never uploads the local family database.
 
 ## Repository
 
