@@ -110,7 +110,8 @@ New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
   /win32icon:$iconFile `
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll `
   /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
-  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'ShareCore.cs') (Join-Path $nativeRoot 'FloatyCore.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
+  /resource:"$(Join-Path $desktopRoot 'database\2026_11_06_local_family_tree.sql'),RacinageFree.LocalFamilyTree.sql" `
+  /reference:$coreDll /reference:$formsDll (Join-Path $nativeRoot 'Program.cs') (Join-Path $nativeRoot 'FamilyTree.cs') (Join-Path $nativeRoot 'FamilyTreeApi.cs') (Join-Path $nativeRoot 'FamilyTreePage.cs') (Join-Path $nativeRoot 'ShareCore.cs') (Join-Path $nativeRoot 'FloatyCore.cs') (Join-Path $nativeRoot 'AiCompanion.cs') (Join-Path $nativeRoot 'ConnectedMessaging.cs')
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $hostExe)) {
   throw 'The Racinage Free native host did not compile.'
 }
@@ -125,6 +126,13 @@ Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'ai-assistant.css') -Destination 
 Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'ai-assistant.js') -Destination (Join-Path $stagingRoot 'assets') -Force
 Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'floaty.css') -Destination (Join-Path $stagingRoot 'assets') -Force
 Copy-Item -LiteralPath (Join-Path $aiAssetRoot 'floaty.js') -Destination (Join-Path $stagingRoot 'assets') -Force
+# Family tree: vendored hosted front end plus the Free page template and adapter (see tree\VENDORED.md).
+$treeStaging = Join-Path $stagingRoot 'tree'
+New-Item -ItemType Directory -Path $treeStaging -Force | Out-Null
+Copy-Item -Path (Join-Path $desktopRoot 'tree\assets\*') -Destination $treeStaging -Force
+foreach ($file in @('tree_page.html', 'tree_adapter.js', 'tree_adapter.css')) {
+  Copy-Item -LiteralPath (Join-Path $desktopRoot "tree\$file") -Destination $treeStaging -Force
+}
 New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'fonts\inter') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force
 Copy-Item -LiteralPath (Join-Path $fontRoot 'InterVariable-Italic.woff2') -Destination (Join-Path $stagingRoot 'fonts\inter') -Force
@@ -151,7 +159,10 @@ Set-Content -LiteralPath (Join-Path $stagingRoot 'config.sample.json') -Encoding
 }
 "@
 
-foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll')) {
+# The host is .NET and e_sqlite3/WebView2Loader link the C runtime statically, so the VC++ runtime DLLs are
+# only shipped next to the optional share target. Leaving them out saves about 1.2 MB uncompressed.
+$vcRuntime = if (Test-Path -LiteralPath (Join-Path $stagingRoot 'share-target')) { @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll') } else { @() }
+foreach ($dll in $vcRuntime) {
   $candidate = Join-Path $env:SystemRoot "System32\$dll"
   if (Test-Path -LiteralPath $candidate) {
     Copy-Item -LiteralPath $candidate -Destination (Join-Path $stagingRoot $dll) -Force
@@ -161,7 +172,7 @@ foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'co
 if (Test-Path -LiteralPath $payloadZip) {
   Remove-Item -LiteralPath $payloadZip -Force
 }
-tar.exe -a -c -f $payloadZip -C $stagingRoot .
+tar.exe -a -c -f $payloadZip --options zip:compression-level=9 -C $stagingRoot .
 if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $payloadZip)) {
   throw 'Unable to create the Racinage Free payload zip.'
 }

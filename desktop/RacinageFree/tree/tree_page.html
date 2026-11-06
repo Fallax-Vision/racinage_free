@@ -1,0 +1,331 @@
+<div id="main_container">
+  <div class="stats_bottom_container display_flex left_center">
+    <div class="wrapper_stats">{{stats}}</div>
+    <div class="gradient_overlay"></div>
+  </div>
+  <script>window.RACINAGE_TREE_I18N = {{i18n_json}};</script>
+  <script type="application/json" id="profile-crop-labels">{{crop_json}}</script>
+  <div class="tree_container{{vertical_class}}" id="tree_container" {{deferred_attrs}}
+    data-tree-snapshot-url="/includes/tree_save.include.php"
+    data-tree-cache-namespace=""
+    data-tree-loading-label="{{t:Loading family tree}}"
+    data-tree-loading-error="{{t:Could not load family tree}}"
+    data-tree-layout-pending="true"
+    data-tree-layout-initial="true"
+    data-tree-print-url="/tree-assets/tree_print.js?v={{version}}"
+    data-tree-can-rearrange="true"
+    data-tree-can-add-persons="true"
+    data-tree-id="{{tree_long_id}}"
+    data-partial-tree-id="{{partial_id}}"
+    data-partial-tree-temporary="{{partial_temp}}"
+    data-active-share-type="{{share_type}}"
+    data-tree-preference-csrf="{{csrf}}"
+    data-tree-session-user="local"
+    data-tree-session-family="local"
+    data-tree-live-url=""
+    data-tree-name="{{tree_name}}"
+    data-tree-public="false"
+    data-public-token=""
+    data-public-family-token=""
+    data-default-zoom="0.80"
+    data-generation-rail="show"
+    data-default-view="{{view}}"
+    data-minimap="show"
+    data-minimap-position="bottom-right"
+    data-can-remove-relations="true"
+    data-can-hide-persons="true">
+    <div class="family_tree_picker" id="family_tree_picker">
+      <button type="button" id="familyTreePickerToggle" class="family_tree_picker_toggle{{picker_partial_class}}" aria-expanded="false" aria-label="{{picker_label}}">
+        <div class="family_tree_picker_name">
+          {{picker_badge}}
+          <span class="family_tree_picker_tree_name">{{tree_name_or_none}}</span>
+        </div>
+        <svg viewBox="0 0 20 20"><path d="M5 8l5 5 5-5z"/></svg>
+      </button>
+      <div class="family_tree_picker_menu" id="familyTreePickerMenu" data-tree-picker-storage="local" data-collection-selection="">
+        {{picker_search}}
+        <div data-tree-picker-results>{{picker_rows}}</div>
+        <button type="button" class="family_tree_picker_new" id="newFamilyTreeBtn" data-racinage-create-resource="trees">
+          <span>+</span> {{t:New Family Tree}}
+        </button>
+      </div>
+    </div>
+    <div class="tree_manage_menu" id="treeManageMenu" aria-hidden="true">
+      <button type="button" data-tree-menu-action="stats"><svg class="menu_item_icon" viewBox="0 0 20 20"><path d="M10.281,1.781C5.75,1.781,2.062,5.469,2.062,10s3.688,8.219,8.219,8.219S18.5,14.531,18.5,10S14.812,1.781,10.281,1.781M10.714,2.659c3.712,0.216,6.691,3.197,6.907,6.908h-6.907V2.659z M10.281,17.354c-4.055,0-7.354-3.298-7.354-7.354c0-3.911,3.067-7.116,6.921-7.341V10c0,0.115,0.045,0.225,0.127,0.305l5.186,5.189C13.863,16.648,12.154,17.354,10.281,17.354M15.775,14.882l-4.449-4.449h6.295C17.522,12.135,16.842,13.684,15.775,14.882"></path></svg><span>{{t:Tree Stats}}</span></button>
+      <button type="button" data-tree-menu-action="important_dates"><svg class="menu_item_icon" viewBox="0 0 20 20"><path d="M16.557,4.467h-1.64v-0.82c0-0.225-0.183-0.41-0.409-0.41c-0.226,0-0.41,0.185-0.41,0.41v0.82H5.901v-0.82c0-0.225-0.185-0.41-0.41-0.41c-0.226,0-0.41,0.185-0.41,0.41v0.82H3.442c-0.904,0-1.64,0.735-1.64,1.639v9.017c0,0.904,0.736,1.64,1.64,1.64h13.114c0.904,0,1.64-0.735,1.64-1.64V6.106C18.196,5.203,17.461,4.467,16.557,4.467 M17.377,15.123c0,0.453-0.366,0.819-0.82,0.819H3.442c-0.453,0-0.82-0.366-0.82-0.819V8.976h14.754V15.123z M17.377,8.156H2.623V6.106c0-0.453,0.367-0.82,0.82-0.82h1.639v1.23c0,0.225,0.184,0.41,0.41,0.41c0.225,0,0.41-0.185,0.41-0.41v-1.23h8.196v1.23c0,0.225,0.185,0.41,0.41,0.41c0.227,0,0.409-0.185,0.409-0.41v-1.23h1.64c0.454,0,0.82,0.367,0.82,0.82V8.156z"></path></svg><span>{{t:Important Dates}}</span></button>
+      <button type="button" data-tree-menu-action="print"><svg class="menu_item_icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.625,6.066h-1.449V3.168c0-0.228-0.186-0.414-0.414-0.414H5.238c-0.228,0-0.414,0.187-0.414,0.414v2.898H3.375c-0.913,0-1.656,0.743-1.656,1.656v4.969c0,0.913,0.743,1.656,1.656,1.656h1.449v2.484c0,0.228,0.187,0.414,0.414,0.414h9.523c0.229,0,0.414-0.187,0.414-0.414v-2.484h1.449c0.912,0,1.656-0.743,1.656-1.656V7.723C18.281,6.81,17.537,6.066,16.625,6.066 M5.652,3.582h8.695v2.484H5.652V3.582zM14.348,16.418H5.652v-4.969h8.695V16.418z M17.453,12.691c0,0.458-0.371,0.828-0.828,0.828h-1.449v-2.484c0-0.228-0.186-0.414-0.414-0.414H5.238c-0.228,0-0.414,0.186-0.414,0.414v2.484H3.375c-0.458,0-0.828-0.37-0.828-0.828V7.723c0-0.458,0.371-0.828,0.828-0.828h13.25c0.457,0,0.828,0.371,0.828,0.828V12.691z M7.309,13.312h5.383c0.229,0,0.414-0.187,0.414-0.414s-0.186-0.414-0.414-0.414H7.309c-0.228,0-0.414,0.187-0.414,0.414S7.081,13.312,7.309,13.312M7.309,15.383h5.383c0.229,0,0.414-0.187,0.414-0.414s-0.186-0.414-0.414-0.414H7.309c-0.228,0-0.414,0.187-0.414,0.414S7.081,15.383,7.309,15.383"></path></svg><span>{{t:Print Tree}}</span></button>
+      <button type="button" data-tree-menu-action="rename"><svg class="menu_item_icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M19.404,6.65l-5.998-5.996c-0.292-0.292-0.765-0.292-1.056,0l-2.22,2.22l-8.311,8.313l-0.003,0.001v0.003l-0.161,0.161c-0.114,0.112-0.187,0.258-0.21,0.417l-1.059,7.051c-0.035,0.233,0.044,0.47,0.21,0.639c0.143,0.14,0.333,0.219,0.528,0.219c0.038,0,0.073-0.003,0.111-0.009l7.054-1.055c0.158-0.025,0.306-0.098,0.417-0.211l8.478-8.476l2.22-2.22C19.695,7.414,19.695,6.941,19.404,6.65z M8.341,16.656l-0.989-0.99l7.258-7.258l0.989,0.99L8.341,16.656z M2.332,15.919l0.411-2.748l4.143,4.143l-2.748,0.41L2.332,15.919z M13.554,7.351L6.296,14.61l-0.849-0.848l7.259-7.258l0.423,0.424L13.554,7.351zM10.658,4.457l0.992,0.99l-7.259,7.258L3.4,11.715L10.658,4.457z M16.656,8.342l-1.517-1.517V6.823h-0.003l-0.951-0.951l-2.471-2.471l1.164-1.164l4.942,4.94L16.656,8.342z"></path></svg><span>{{t:Rename}}</span></button>
+      <button type="button" data-tree-menu-action="duplicate"><svg class="menu_item_icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M17.391,2.406H7.266c-0.232,0-0.422,0.19-0.422,0.422v3.797H3.047c-0.232,0-0.422,0.19-0.422,0.422v10.125c0,0.232,0.19,0.422,0.422,0.422h10.125c0.231,0,0.422-0.189,0.422-0.422v-3.797h3.797c0.232,0,0.422-0.19,0.422-0.422V2.828C17.812,2.596,17.623,2.406,17.391,2.406 M12.749,16.75h-9.28V7.469h3.375v5.484c0,0.231,0.19,0.422,0.422,0.422h5.483V16.75zM16.969,12.531H7.688V3.25h9.281V12.531z"></path></svg><span>{{t:Duplicate}}</span></button>
+      <button type="button" data-tree-menu-action="archive"><svg class="menu_item_icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M17.927,5.828h-4.41l-1.929-1.961c-0.078-0.079-0.186-0.125-0.297-0.125H4.159c-0.229,0-0.417,0.188-0.417,0.417v1.669H2.073c-0.229,0-0.417,0.188-0.417,0.417v9.596c0,0.229,0.188,0.417,0.417,0.417h15.854c0.229,0,0.417-0.188,0.417-0.417V6.245C18.344,6.016,18.156,5.828,17.927,5.828 M4.577,4.577h6.539l1.231,1.251h-7.77V4.577z M17.51,15.424H2.491V6.663H17.51V15.424z"></path></svg><span>{{t:Archive}}</span></button>
+      <button type="button" data-tree-menu-action="delete" class="danger"><svg class="menu_item_icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M17.114,3.923h-4.589V2.427c0-0.252-0.207-0.459-0.46-0.459H7.935c-0.252,0-0.459,0.207-0.459,0.459v1.496h-4.59c-0.252,0-0.459,0.205-0.459,0.459c0,0.252,0.207,0.459,0.459,0.459h1.51v12.732c0,0.252,0.207,0.459,0.459,0.459h10.29c0.254,0,0.459-0.207,0.459-0.459V4.841h1.511c0.252,0,0.459-0.207,0.459-0.459C17.573,4.127,17.366,3.923,17.114,3.923M8.394,2.886h3.214v0.918H8.394V2.886z M14.686,17.114H5.314V4.841h9.372V17.114z M12.525,7.306v7.344c0,0.252-0.207,0.459-0.46,0.459s-0.458-0.207-0.458-0.459V7.306c0-0.254,0.205-0.459,0.458-0.459S12.525,7.051,12.525,7.306M8.394,7.306v7.344c0,0.252-0.207,0.459-0.459,0.459s-0.459-0.207-0.459-0.459V7.306c0-0.254,0.207-0.459,0.459-0.459S8.394,7.051,8.394,7.306"></path></svg><span>{{t:Delete}}</span></button>
+    </div>
+    <div class="tree_generation_indicator" id="treeGenerationIndicator" aria-hidden="true"></div>
+    <div class="layout_toggle_btns">
+      <div class="layout_dropdown" id="layoutDropdown">
+        <button type="button" class="layout_dropdown_toggle" id="layoutDropdownToggle" aria-haspopup="true" aria-expanded="false" title="{{t:Layout}}">
+          <span class="layout_toggle_icon"><svg viewBox="0 0 20 20"><path d="M17.283,5.549h-5.26V4.335c0-0.222-0.183-0.404-0.404-0.404H8.381c-0.222,0-0.404,0.182-0.404,0.404v1.214h-5.26c-0.223,0-0.405,0.182-0.405,0.405v9.71c0,0.223,0.182,0.405,0.405,0.405h14.566c0.223,0,0.404-0.183,0.404-0.405v-9.71C17.688,5.731,17.506,5.549,17.283,5.549 M8.786,4.74h2.428v0.809H8.786V4.74z M16.879,15.26H3.122v-4.046h5.665v1.201c0,0.223,0.182,0.404,0.405,0.404h1.618c0.222,0,0.405-0.182,0.405-0.404v-1.201h5.665V15.26z M9.595,9.583h0.81v2.428h-0.81V9.583zM16.879,10.405h-5.665V9.19c0-0.222-0.183-0.405-0.405-0.405H9.191c-0.223,0-0.405,0.183-0.405,0.405v1.215H3.122V6.358h13.757V10.405z"/></svg></span>
+          <span class="layout_current_label">{{view_label}}</span>
+          <span class="layout_caret"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg></span>
+        </button>
+        <div class="layout_dropdown_menu" data-view-preference="trees" role="menu">
+          <button id="layoutHorizontal" class="layout_btn horizontal{{horizontal_active}}" data-tree-view="horizontal" title="{{t:Horizontal}}" role="menuitem">
+            <span class="layout_btn_icon"><svg viewBox="0 0 20 20"><path d="M17.728,4.419H2.273c-0.236,0-0.429,0.193-0.429,0.429v10.304c0,0.234,0.193,0.428,0.429,0.428h15.455c0.235,0,0.429-0.193,0.429-0.428V4.849C18.156,4.613,17.963,4.419,17.728,4.419 M17.298,14.721H2.702V9.57h14.596V14.721zM17.298,8.712H2.702V7.424h14.596V8.712z M17.298,6.566H2.702V5.278h14.596V6.566z M9.142,13.005c0,0.235-0.193,0.43-0.43,0.43H4.419c-0.236,0-0.429-0.194-0.429-0.43c0-0.236,0.193-0.429,0.429-0.429h4.292C8.948,12.576,9.142,12.769,9.142,13.005"/></svg></span>
+            <span>{{t:Horizontal}}</span>
+          </button>
+          <button id="layoutVertical" class="layout_btn{{vertical_active}}" data-tree-view="vertical" title="{{t:Vertical}}" role="menuitem">
+            <span class="layout_btn_icon"><svg viewBox="0 0 20 20"><path d="M18.092,5.137l-3.977-1.466h-0.006c0.084,0.042-0.123-0.08-0.283,0H13.82L10,5.079L6.178,3.671H6.172c0.076,0.038-0.114-0.076-0.285,0H5.884L1.908,5.137c-0.151,0.062-0.25,0.207-0.25,0.369v10.451c0,0.691,0.879,0.244,0.545,0.369l3.829-1.406l3.821,1.406c0.186,0.062,0.385-0.029,0.294,0l3.822-1.406l3.83,1.406c0.26,0.1,0.543-0.08,0.543-0.369V5.506C18.342,5.344,18.242,5.199,18.092,5.137 M5.633,14.221l-3.181,1.15V5.776l3.181-1.15V14.221z M9.602,15.371l-3.173-1.15V4.626l3.173,1.15V15.371z M13.57,14.221l-3.173,1.15V5.776l3.173-1.15V14.221z M17.547,15.371l-3.182-1.15V4.626l3.182,1.15V15.371z"/></svg></span>
+            <span>{{t:Vertical}}</span>
+          </button>
+        </div>
+      </div>
+      <button id="verticalEditToggle" class="v_edit_toggle" type="button" title="{{t:Edit}}" aria-pressed="false">
+        <span class="v_edit_label">{{t:Edit}}</span>
+        <span class="perm_toggle_btn" aria-hidden="true"><span class="perm_toggle_knob"></span></span>
+      </button>
+    </div>
+    {{loading_state}}
+    <div id="treeCanvas" class="tree_canvas">
+      <div class="tree">{{canvas}}</div>
+    </div>
+    <div class="v_tree_container">
+      <div class="v_tree"></div>
+    </div>
+    <div class="racinage_modal_backdrop tree_modal_backdrop" id="treeActionModal" aria-hidden="true">
+      <form class="racinage_modal tree_action_modal" id="treeActionForm" method="post" action="/includes/tree_save.include.php" hx-boost="false" enctype="multipart/form-data">
+        <input type="hidden" name="action" id="treeActionName" value="">
+        <input type="hidden" name="tree_long_id" value="{{tree_long_id}}">
+        <input type="hidden" name="anchor_person_id" id="treeActionAnchorId" value="">
+        <input type="hidden" name="child_id" id="treeActionChildId" value="">
+        <input type="hidden" name="second_parent_id" id="treeActionSecondParentId" value="">
+        <input type="hidden" name="person_source" id="treePersonSource" value="existing">
+        <input type="hidden" name="existing_person_id" id="treeExistingPersonId" value="">
+        <div class="tree_modal_header">
+          <div class="tree_modal_title">
+            <button type="button" class="tree_modal_close tree_modal_back" id="treeActionBack" hidden aria-label="{{t:Back}}" title="{{t:Back}}">{{back_icon}}</button>
+            <h3 id="treeActionTitle">{{t:Add First Member}}</h3>
+          </div>
+          <button type="button" class="tree_modal_close" id="treeActionClose" aria-label="{{t:Close}}">×</button>
+        </div>
+        <div class="tree_person_source_tabs" id="treePersonSourceTabs" hidden>
+          <button type="button" class="tree_person_source_tab active" data-person-source="existing">{{t:Existing}}</button>
+          <button type="button" class="tree_person_source_tab" data-person-source="new">{{t:New Person}}</button>
+          <button type="button" class="tree_person_source_tab" data-person-source="paste" hidden>{{t:Paste}}</button>
+        </div>
+        <div class="tree_form_section" data-tree-section="first_member">
+          <label class="tree_image_picker">
+            <input type="file" name="first_member_image" data-profile-crop data-profile-crop-max="5" accept="image/jpeg,image/png,image/webp">
+            <span class="tree_image_preview"><span>+</span></span>
+            <strong>{{t:Profile image}}</strong>
+          </label>
+          <div class="tree_form_grid two">
+            <label class="tree_unknown_identity"><input type="checkbox" name="identity_unknown" value="1" data-unknown-identity="" data-unknown-label="{{t:Unknown person}}"><span>{{t:Unknown person}}<small>{{t:You can add their identity later.}}</small></span></label>
+            <label><span>{{t:First name}} <em class="required">{{t:Required}}</em></span><input type="text" name="first_name" autocomplete="off"></label>
+            <label><span>{{t:Last name}} <em>{{t:Optional}}</em></span><input type="text" name="last_name" autocomplete="off"></label>
+            <label><span>{{t:Gender}} <em class="required">{{t:Required}}</em></span>
+              <select name="gender"><option value="M">{{t:Male}}</option><option value="F">{{t:Female}}</option></select>
+            </label>
+            <label><span>{{t:Birth date}} <em>{{t:Optional}}</em></span><input type="date" name="birth_date"></label>
+          </div>
+          <div class="tree_form_grid two">
+            <label><span>{{t:Phone}} <em>{{t:Optional}}</em></span><input type="tel" name="phone1" autocomplete="tel"></label>
+            <label><span>{{t:Email}} <em>{{t:Optional}}</em></span><input type="email" name="email1" autocomplete="email"></label>
+            <label class="wide"><span>{{t:Location address}} <em>{{t:Optional}}</em></span><input type="text" name="address" autocomplete="street-address"></label>
+          </div>
+        </div>
+        <div class="tree_form_section" data-tree-section="person">
+          <label class="tree_image_picker">
+            <input type="file" name="person_image" data-profile-crop data-profile-crop-max="5" accept="image/jpeg,image/png,image/webp">
+            <span class="tree_image_preview"><span>+</span></span>
+            <strong>{{t:Profile image}}</strong>
+          </label>
+          <div class="tree_form_grid two">
+            <label class="tree_unknown_identity"><input type="checkbox" name="person_identity_unknown" value="1" data-unknown-identity="person_" data-unknown-label="{{t:Unknown person}}"><span>{{t:Unknown person}}<small>{{t:You can add their identity later.}}</small></span></label>
+            <label><span>{{t:First name}} <em class="required">{{t:Required}}</em></span><input type="text" name="person_first_name" autocomplete="off"></label>
+            <label><span>{{t:Last name}} <em>{{t:Optional}}</em></span><input type="text" name="person_last_name" autocomplete="off"></label>
+            <label><span>{{t:Gender}} <em class="required">{{t:Required}}</em></span>
+              <select name="person_gender"><option value="M">{{t:Male}}</option><option value="F">{{t:Female}}</option></select>
+            </label>
+            <label><span>{{t:Birth date}} <em>{{t:Optional}}</em></span><input type="date" name="person_birth_date"></label>
+            <div class="wide tree_birth_position" data-birth-position hidden>
+              <span>{{t:Birth position}} <em>{{t:Optional}}</em></span>
+              <input type="hidden" name="sibling_birth_order" data-birth-order disabled>
+              <input type="hidden" name="sibling_birth_moves" data-birth-moves disabled>
+              <div class="tree_birth_position_grid" role="group" aria-label="{{t:Birth position}}"></div>
+              <small class="tree_form_hint">{{t:Hover a taken number to see who holds it. Click it to move that child.}}</small>
+              <div class="tree_birth_holder_tip" hidden></div>
+              <div class="tree_birth_change" role="dialog" hidden></div>
+            </div>
+            <div class="person_death_field"><label><span>{{t:Death date}} <em>{{t:Optional}}</em></span><input type="date" name="person_death_date"></label><input type="hidden" name="person_is_deceased" value="0"><label class="person_death_unknown"><input type="checkbox" name="person_is_deceased" value="1" data-deceased-unknown><span>{{t:Deceased - date unknown}}</span></label></div>
+            <label><span>{{t:Marital status}} <em>{{t:Optional}}</em></span>
+              <select name="person_marital_status"><option value="single">{{t:Single}}</option><option value="married">{{t:Married}}</option><option value="widowed">{{t:Widowed}}</option><option value="divorced">{{t:Divorced}}</option><option value="separated">{{t:Separated}}</option></select>
+            </label>
+            <label><span>{{t:Phone}} <em>{{t:Optional}}</em></span><input type="tel" name="person_phone1" autocomplete="tel"></label>
+            <label><span>{{t:Second phone}} <em>{{t:Optional}}</em></span><input type="tel" name="person_phone2"></label>
+            <label><span>{{t:Email}} <em>{{t:Optional}}</em></span><input type="email" name="person_email1" autocomplete="email"></label>
+            <label><span>{{t:Second email}} <em>{{t:Optional}}</em></span><input type="email" name="person_email2"></label>
+            <label><span>{{t:Location address}} <em>{{t:Optional}}</em></span><input type="text" name="person_address" autocomplete="street-address"></label>
+            <label><span>{{t:Birth place}} <em>{{t:Optional}}</em></span><input type="text" name="person_birth_place"></label>
+            <label><span>{{t:Nationality}} <em>{{t:Optional}}</em></span><input type="text" name="person_nationality"></label>
+            <label><span>{{t:Blood group}} <em>{{t:Optional}}</em></span><input type="text" name="person_blood_group"></label>
+            <label><span>{{t:Education}} <em>{{t:Optional}}</em></span><input type="text" name="person_education_level"></label>
+            <label><span>{{t:Religion}} <em>{{t:Optional}}</em></span><input type="text" name="person_religion"></label>
+            <label class="wide"><span>{{t:Website}} <em>{{t:Optional}}</em></span><input type="url" name="person_website" placeholder="https://"></label>
+          </div>
+        </div>
+        <div class="tree_form_section" data-tree-section="parents">
+          <label><span>{{t:Parent type}} <em class="required">{{t:Required}}</em></span>
+            <select name="parent_role"><option value="father">{{t:Father}}</option><option value="mother">{{t:Mother}}</option></select>
+          </label>
+          <div data-tree-parent-new-fields>
+            <label class="tree_image_picker">
+              <input type="file" name="parent_image" data-profile-crop data-profile-crop-max="5" accept="image/jpeg,image/png,image/webp">
+              <span class="tree_image_preview"><span>+</span></span>
+              <strong>{{t:Profile image}}</strong>
+            </label>
+            <div class="tree_form_grid two">
+              <label class="tree_unknown_identity"><input type="checkbox" name="parent_identity_unknown" value="1" data-unknown-identity="parent_" data-unknown-label="{{t:Unknown person}}"><span>{{t:Unknown person}}<small>{{t:You can add their identity later.}}</small></span></label>
+              <label><span>{{t:First name}} <em class="required">{{t:Required}}</em></span><input type="text" name="parent_first_name" autocomplete="off"></label>
+              <label><span>{{t:Last name}} <em>{{t:Optional}}</em></span><input type="text" name="parent_last_name" autocomplete="off"></label>
+            </div>
+          </div>
+        </div>
+        <div class="tree_form_section tree_existing_person_section" id="treeExistingPersonSection" hidden>
+          <label>{{t:Search people}}<input type="search" id="treeExistingPersonSearch" autocomplete="off" placeholder="{{t:Search by name}}"></label>
+          <div class="tree_existing_person_grid" id="treeExistingPersonGrid" aria-live="polite"></div>
+          <p class="tree_form_hint">{{t:Only people who are not already in this family tree are shown.}}</p>
+        </div>
+        <div class="tree_form_section tree_paste_partial_section" id="treePastePartialSection" hidden>
+          <label>{{t:Paste a copied Partial}}<textarea id="treePastePartialInput" rows="9" spellcheck="false" autocomplete="off" placeholder="{{t:Paste the text copied with Copy Partial here.}}"></textarea></label>
+          <div class="tree_partial_preview" id="treePastePartialPreview" aria-live="polite" hidden></div>
+          <div class="tree_paste_sibling" id="treePasteSibling" hidden>
+            <h4>{{t:Which parent is the child of this family?}}</h4>
+            <div class="tree_person_source_tabs" data-paste-sibling-options></div>
+            <div class="wide tree_birth_position" data-birth-position hidden>
+              <span>{{t:Birth position}} <em>{{t:Optional}}</em></span>
+              <input type="hidden" data-birth-order disabled>
+              <input type="hidden" data-birth-moves disabled>
+              <div class="tree_birth_position_grid" role="group" aria-label="{{t:Birth position}}"></div>
+              <small class="tree_form_hint">{{t:Hover a taken number to see who holds it. Click it to move that child.}}</small>
+              <div class="tree_birth_holder_tip" hidden></div>
+              <div class="tree_birth_change" role="dialog" hidden></div>
+            </div>
+          </div>
+          <div class="tree_paste_conflicts" id="treePastePartialConflicts" hidden></div>
+          <div class="tree_paste_partial_actions">
+            <span class="tree_form_hint">{{t:Or choose an exported Partial file.}}</span>
+            <button type="button" class="tree_secondary_action" data-paste-partial-choose>{{t:Choose file}}</button>
+            <button type="button" class="tree_secondary_action" data-paste-partial-clear hidden>{{t:Paste another}}</button>
+            <input type="file" id="treePastePartialFile" accept=".json,application/json" hidden>
+          </div>
+        </div>
+        <section class="tree_person_gallery_section" data-person-gallery-draft data-count-label="{{t:%s media files}}" hidden>
+          <div class="tree_person_gallery_heading">
+            <div>
+              <h4>{{t:Private gallery}}</h4>
+              <small data-person-gallery-draft-count>{{zero_media}}</small>
+            </div>
+            <div class="tree_person_gallery_actions">
+              <button type="button" class="tree_secondary_action" data-person-gallery-draft-add>{{t:Add media}}</button>
+              <input type="file" data-person-gallery-files multiple hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime">
+            </div>
+          </div>
+          <div class="tree_person_gallery_preview_grid" data-person-gallery-draft-grid hidden></div>
+          <div class="tree_person_gallery_preview_empty" data-person-gallery-draft-empty>
+            <strong>{{t:No media yet}}</strong>
+            <span>{{t:Gallery files are uploaded after the person is saved.}}</span>
+          </div>
+        </section>
+        <div class="tree_form_error" id="treeActionError"></div>
+        <div class="tree_modal_actions">
+          <button type="button" class="button1 secondary" id="treeActionCancel">{{t:Cancel}}</button>
+          <button type="submit" class="button1">{{t:Save}}</button>
+        </div>
+      </form>
+    </div>
+    <div class="racinage_modal_backdrop tree_modal_backdrop" id="treePersonModal" aria-hidden="true">
+      <div class="racinage_modal tree_action_modal tree_person_modal" role="dialog" aria-modal="true" aria-labelledby="treePersonTitle" tabindex="-1">
+        <div class="tree_modal_header">
+          <div class="tree_modal_title">
+            <button type="button" class="tree_modal_close tree_modal_back" id="treePersonBack" hidden aria-label="{{t:Back}}" title="{{t:Back}}">{{back_icon}}</button>
+            <h3 id="treePersonTitle">{{t:Person}}</h3>
+          </div>
+          <button type="button" class="tree_modal_close" id="treePersonClose" aria-label="{{t:Close}}">×</button>
+        </div>
+        <div class="tree_person_summary" id="treePersonSummary"></div>
+        <div class="tree_person_actions">
+          <button type="button" class="button1" data-person-action="replace">{{t:Replace}}</button>
+          <button type="button" class="button1" data-person-action="update">{{t:Update}}</button>
+          <button type="button" class="button1 secondary" data-person-action="hide">{{t:Hide}}</button>
+          <button type="button" class="button1 secondary" data-person-action="life_status" id="treePersonLifeStatusBtn">{{t:Mark Dead}}</button>
+          <button type="button" class="button1 danger tree_person_remove_btn" data-person-action="remove">{{t:Remove}}</button>
+        </div>
+      </div>
+    </div>
+    <div class="tree_modal_backdrop person_gallery_modal_backdrop" id="personGalleryModal" data-person-gallery-endpoint="/includes/person_gallery.include.php" data-person-gallery-csrf="{{csrf}}" data-person-gallery-i18n="{{gallery_i18n}}" aria-hidden="true">
+      <div class="racinage_modal person_gallery_modal" role="dialog" aria-modal="true" aria-labelledby="personGalleryTitle">
+        <div class="tree_modal_header">
+          <div class="tree_modal_title">
+            <button type="button" class="tree_modal_close tree_modal_back" data-person-gallery-close aria-label="{{t:Back}}" title="{{t:Back}}">{{back_icon}}</button>
+            <div>
+              <h3 id="personGalleryTitle">{{t:Private gallery}}</h3>
+              <small data-person-gallery-count></small>
+            </div>
+          </div>
+          <div class="person_gallery_header_actions">
+            <button type="button" class="tree_primary_action" data-person-gallery-add>{{t:Add media}}</button>
+            <button type="button" class="tree_modal_close" data-person-gallery-close aria-label="{{t:Close}}">×</button>
+          </div>
+        </div>
+        <input type="file" data-person-gallery-input accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/ogg" multiple hidden>
+        <p class="person_gallery_feedback" data-person-gallery-feedback aria-live="polite"></p>
+        <div class="person_gallery_grid" data-person-gallery-grid></div>
+        <div class="person_gallery_empty" data-person-gallery-empty hidden>
+          <strong>{{t:No media yet}}</strong>
+          <span>{{t:Add private photos and videos for this person.}}</span>
+        </div>
+      </div>
+    </div>
+    <div class="person_gallery_lightbox" id="personGalleryLightbox" role="dialog" aria-modal="true" aria-label="{{t:Private gallery}}" hidden>
+      <button type="button" class="person_gallery_lightbox_close" data-person-gallery-lightbox-close aria-label="{{t:Close}}">×</button>
+      <button type="button" class="person_gallery_lightbox_nav person_gallery_lightbox_prev" data-person-gallery-lightbox-prev aria-label="{{t:Previous}}">‹</button>
+      <div class="person_gallery_lightbox_stage" data-person-gallery-lightbox-stage></div>
+      <div class="person_gallery_lightbox_caption" data-person-gallery-lightbox-caption></div>
+      <button type="button" class="person_gallery_lightbox_nav person_gallery_lightbox_next" data-person-gallery-lightbox-next aria-label="{{t:Next}}">›</button>
+    </div>
+    <div class="racinage_modal_backdrop tree_modal_backdrop" id="treeStatsModal" aria-hidden="true">
+      <section class="racinage_modal tree_action_modal tree_stats_modal" role="dialog" aria-modal="true" aria-labelledby="treeStatsTitle">
+        <div class="tree_modal_header">
+          <h3 id="treeStatsTitle"></h3>
+          <small id="treeStatsStatus" role="status"></small>
+          <button type="button" class="tree_modal_close" data-stats-close aria-label="{{t:Close}}">×</button>
+        </div>
+        <label class="tree_stats_search">{{t:Search people}}<input type="search" id="treeStatsSearch" autocomplete="off" placeholder="{{t:Search by name}}"></label>
+        <div class="tree_stats_filters" data-stats-filters>{{stats_filters}}</div>
+        <div class="tree_existing_person_grid" id="treeStatsGrid" aria-busy="false"></div>
+        <button type="button" class="button1 secondary" id="treeStatsRetry" hidden>{{t:Retry}}</button>
+      </section>
+    </div>
+    <div class="racinage_modal_backdrop tree_modal_backdrop" id="treeUtilityModal" aria-hidden="true">
+      <form class="racinage_modal tree_action_modal tree_utility_modal" id="treeUtilityForm" hx-boost="false">
+        <div class="tree_modal_header">
+          <div class="tree_modal_title">
+            <button type="button" class="tree_modal_close tree_modal_back" id="treeUtilityBack" hidden aria-label="{{t:Back}}" title="{{t:Back}}">{{back_icon}}</button>
+            <h3 id="treeUtilityTitle">{{t:Confirm}}</h3>
+          </div>
+          <button type="button" class="tree_modal_close" id="treeUtilityClose" aria-label="{{t:Close}}">×</button>
+        </div>
+        <p class="tree_utility_message" id="treeUtilityMessage"></p>
+        <div class="tree_utility_choices" id="treeUtilityChoices" hidden></div>
+        <label class="tree_utility_field" id="treeUtilityField">
+          <span id="treeUtilityInputLabel">{{t:Name}}</span>
+          <input type="text" id="treeUtilityInput" autocomplete="off">
+        </label>
+        <div class="tree_form_error" id="treeUtilityError"></div>
+        <div class="tree_modal_actions">
+          <button type="button" class="button1 secondary" id="treeUtilityCancel">{{t:Cancel}}</button>
+          <button type="submit" class="button1" id="treeUtilityConfirm">OK</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

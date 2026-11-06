@@ -5,8 +5,8 @@
   "development_artifact": {
     "status": "unpublished_unsigned",
     "path": "desktop/RacinageFree/dist/development/RacinageFree-v0.17.0-dev.exe",
-    "sha256": "b0611366782885a217b9cecf7b9cf95339ee8afae65791759616f67d8841bb52",
-    "bytes": 2570752
+    "sha256": "4b86e080f99b9fcf5b6b26708fc61eeef2c6de4ba5667e9c58f0d07d7ba57fad",
+    "bytes": 2257920
   },
   "version": "0.15.0",
   "tag": "racinage-free-v0.15.0",

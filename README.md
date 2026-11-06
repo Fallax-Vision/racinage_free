@@ -21,6 +21,7 @@ The source tree is now `v0.17.0`. It includes an optional local AI assistant for
 - Borderless native C# WinForms/WebView2 host with one custom app bar.
 - Local loopback server and embedded SQLite storage.
 - Hosted-style Manage sections without collaboration controls.
+- Offline family tree with the hosted Racinage tree front end: up to 2 trees, horizontal and vertical views, pan and zoom, print preview, parents, spouses, partners and children, birth positions, main couple and partner changes, hide, life status, profile photos, a private photo and video gallery, statistics, important dates, and Temporary and Permanent Partial Trees with signed export, copy and paste. People from the earlier flat list are migrated unplaced and can be added as existing people. See `desktop/RacinageFree/tree/VENDORED.md`.
 - Private offline Progress analytics with local levels, weekly consistency, badges, and optional static interface accents. See [Progress in Racinage Free](docs/progress.md).
 - Optional hosted messaging connection through browser-based device authorization. Password and two-factor authentication are entered only on `racinage.com`.
 - Windows DPAPI-protected hosted tokens, an encrypted local message cache, an encrypted ordered offline outbox, resumable file uploads, event-stream recovery, and explicit reconnect conflict reporting.
@@ -59,6 +60,12 @@ Output:
 
 ```text
 desktop\RacinageFree\dist\development\RacinageFree-v0.17.0-dev.exe
+```
+
+Tree checks (golden markup against the hosted PHP renderer, the local tree endpoints, the SQLite migration and a 600-person tree):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop\RacinageFree\tests\family-tree\run-family-tree-checks.ps1
 ```
 
 Development builds are intentionally unsigned and are not release artifacts. Public `v0.17.0` builds require the protected `RACINAGE_WINDOWS_SIGNTOOL` plus a signing certificate path or thumbprint; the build verifies signatures on both the native host and bootstrapper.

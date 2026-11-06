@@ -555,6 +555,7 @@ namespace RacinageFreeDesktop {
         if (path == "/upgrade") { Redirect(context, PortablePaths.PricingUrl); return; }
         if (path == "/login") { Login(context); return; }
         if (path == "/start-free") { StartFree(context); return; }
+        if (TreeRoute(context, path)) return;
         if (path == "/family") { Family(context); return; }
         if (path == "/messages") {
           if (!IsAuthenticated(context)) { Redirect(context, "/login"); return; }
@@ -697,7 +698,7 @@ namespace RacinageFreeDesktop {
           int id;
           if (int.TryParse(form.ContainsKey("id") ? form["id"] : "0", out id)) store.DeletePerson(id);
         }
-        Redirect(context, "/family");
+        Redirect(context, action == "save_family" ? "/manage/family" : "/family");
         return;
       }
       WriteHtml(context, FamilyPage(""));
@@ -958,7 +959,11 @@ namespace RacinageFreeDesktop {
       else if (active == "progress") content = ProgressPanel();
       else if (active == "family") {
         Dictionary<string, string> family = store.GetFamily();
-        content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family records</a></div><dl class='facts'><div><dt>Name</dt><dd>" + H(family["name"]) + "</dd></div><div><dt>Location</dt><dd>" + H(family["location"] == "" ? "Not set" : family["location"]) + "</dd></div></dl></section>";
+        content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family tree</a></div><form method='post' action='/family'>" + CsrfInput() + "<input type='hidden' name='action' value='save_family'>" +
+          "<label>Family name<input name='name' value='" + A(family["name"]) + "' required></label>" +
+          "<label>Location<input name='location' value='" + A(family["location"]) + "'></label>" +
+          "<label>Family story<textarea name='story' rows='5'>" + H(family["story"]) + "</textarea></label>" +
+          "<button class='button' type='submit'>Save family details</button></form></section>";
       } else if (active == "settings") {
         List<Dictionary<string,string> > rates=store.GetCurrencyRates();string selected=store.GetDisplayCurrency();StringBuilder options=new StringBuilder(),lines=new StringBuilder();foreach(Dictionary<string,string> rate in rates){options.Append("<option value='"+A(rate["code"])+"'"+(rate["code"]==selected?" selected":"")+">"+H(rate["code"]+" - "+rate["name"])+"</option>");lines.Append(rate["code"]+" | "+rate["name"]+" | "+rate["rate"]+"\r\n");}
         content = "<section class='manage-grid'><article class='manage-card'><h2>Local settings</h2><p>Database, media, installed plugins, and device tokens stay under your Windows user profile.</p><dl class='facts'><div><dt>Edition</dt><dd>Lite Free Portable</dd></div><div><dt>Version</dt><dd>" + H(PortablePaths.Version) + "</dd></div><div><dt>Plugin updates</dt><dd>Checked only when you open the Plugins tab</dd></div></dl></article><article class='manage-card'><h2>Share with Racinage Free</h2><p>Paste a link or text into the local chooser when the optional signed Windows Share Target identity is not installed.</p><a class='button ghost' href='/share'>Open share chooser</a></article><article class='manage-card'><h2>Currency localisation</h2><p>Finance Manager uses this account display currency. Rates are entered as the amount of each currency equal to 1 USD.</p><form method='post' action='/manage/settings'>"+CsrfInput()+"<input type='hidden' name='action' value='save_currency_settings'><label>Display currency<select name='display_currency'>"+options+"</select></label><label>Offline currency rates<textarea name='currency_rates' rows='8' spellcheck='false'>"+H(lines.ToString())+"</textarea></label><small>One per line: CODE | Name | rate. USD must remain 1.</small><button class='button' type='submit'>Save currency settings</button></form></article></section>";
@@ -1530,6 +1535,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_tool_calls_run ON local_ai_tool_calls(run_id,id)");
         db.Exec("CREATE TABLE IF NOT EXISTS local_ai_usage_audits (id INTEGER PRIMARY KEY AUTOINCREMENT,correlation_id TEXT NOT NULL,provider_kind TEXT NOT NULL,model TEXT NOT NULL DEFAULT '',tool_name TEXT NOT NULL DEFAULT '',confirmation_outcome TEXT NOT NULL DEFAULT '',status TEXT NOT NULL,latency_ms INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)");
         db.Exec("CREATE INDEX IF NOT EXISTS idx_local_ai_usage_audits_created ON local_ai_usage_audits(created_at)");
+        LocalFamilyTreeSchema.Apply(db);
       }
       EnsureBuiltinFinanceManager();
       ProtectDatabaseFile();
@@ -2299,6 +2305,7 @@ select{width:100%;border:1px solid #cad8dd;border-radius:8px;padding:10px 12px;f
         string id = Convert.ToString(db.Scalar("SELECT last_insert_rowid()"), CultureInfo.InvariantCulture);
         progressId = id;
         RecordChange(db, "people", id, "insert", HashText(fullName + "|" + relationship + "|" + birthDate + "|" + place + "|" + notes));
+        LocalFamilyTreeSchema.Apply(db); // Copies the new record into persons so the tree can place it now.
       }
       RecordProgressEvent("person_added","person",progressId,20);
       ProtectDatabaseFile();

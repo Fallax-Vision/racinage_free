@@ -1,0 +1,27 @@
+{
+  "fr": {
+    "Selected person does not match the required gender.": "La personne choisie ne correspond pas au genre requis.",
+    "Birth position must be a positive number.": "Le rang de naissance doit être un nombre positif.",
+    "Invalid request. Please refresh and try again.": "Requête invalide. Actualisez la page et réessayez.",
+    "Family tree selected.": "Arbre familial sélectionné.",
+    "Family tree loaded.": "Arbre familial chargé.",
+    "Racinage Free includes 2 family trees. Archive or delete a tree, or upgrade to add more.": "Racinage Free inclut 2 arbres familiaux. Archivez ou supprimez un arbre, ou passez à une offre supérieure pour en ajouter.",
+    "A member cannot be their own parent.": "Un membre ne peut pas être son propre parent.",
+    "Selected parent was not found.": "Le parent choisi est introuvable.",
+    "Selected parent is already below this member in the tree.": "Le parent choisi est déjà sous ce membre dans l’arbre.",
+    "Relationship not found.": "Relation introuvable.",
+    "The selected parent couple reference is invalid or expired.": "La référence du couple parental choisi est invalide ou expirée.",
+    "The selected parent couple is no longer available.": "Le couple parental choisi n’est plus disponible.",
+    "Temporary Partial Tree ready.": "Arbre partiel temporaire prêt.",
+    "Permanent Partial Tree created.": "Arbre partiel permanent créé.",
+    "This feature is available on racinage.com.": "Cette fonctionnalité est disponible sur racinage.com.",
+    "The Partial Tree was not found.": "Arbre partiel introuvable.",
+    "Enter a Partial Tree name.": "Saisissez un nom d’arbre partiel.",
+    "Choose a valid parent couple in the canonical tree.": "Choisissez un couple parental valide dans l’arbre principal.",
+    "No Partial Tree changes were provided.": "Aucune modification de l’arbre partiel n’a été fournie.",
+    "Partial Tree updated.": "Arbre partiel mis à jour.",
+    "No Family Tree": "Aucun arbre familial",
+    "Unknown action.": "Action inconnue.",
+    "Could not add person to this tree.": "Impossible d’ajouter la personne à cet arbre."
+  }
+}
