@@ -5,7 +5,8 @@ param(
   [string]$DatabaseCopy = '',
   # Serve an isolated test instance (temporary data folder) until stopped, for browser checks.
   [switch]$Serve,
-  [string]$ServeRoot = ''
+  [string]$ServeRoot = '',
+  [string]$ServeLang = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +44,7 @@ try {
   New-Item -ItemType Directory -Path $treeAssets | Out-Null
   Copy-Item -Path (Join-Path $desktopRoot 'tree\assets\*') -Destination $treeAssets
   Copy-Item -LiteralPath (Join-Path $desktopRoot 'tree\tree_page.html'), (Join-Path $desktopRoot 'tree\tree_adapter.js'), (Join-Path $desktopRoot 'tree\tree_adapter.css') -Destination $treeAssets
-  if ($Serve) { & $exe --serve $ServeRoot; return }
+  if ($Serve) { & $exe --serve $ServeRoot $ServeLang; return }
   $arguments = @($fixtures)
   if ($DatabaseCopy -ne '') { $arguments += (Resolve-Path -LiteralPath $DatabaseCopy).Path }
   & $exe @arguments

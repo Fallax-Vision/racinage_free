@@ -2,3 +2,30 @@
 body.racinage_free_tree{margin:0;overflow:hidden;background:#edf4f7}
 body.racinage_free_tree #header{position:relative;z-index:40}
 body.racinage_free_tree .tree_container{height:calc(100vh - 58px)}
+/* Manage Persons directory */
+body.free_persons_body{overflow:auto;background:#f8fbfc}
+.free_persons{max-width:1120px;margin:0 auto;padding:28px 24px 60px}
+.free_persons_head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:16px}
+.free_persons_head h1{margin:0 0 4px;font-size:32px;color:var(--main_color_darker,#007584)}
+.free_persons_head p{margin:0;color:#666}
+.free_persons_toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;padding:12px;border:1px solid #e5e5e5;border-radius:10px;background:#fff}
+.free_persons_toolbar label{display:grid;gap:4px;font-size:12px;font-weight:700;color:#555;flex:1 1 200px}
+.free_persons_toolbar input,.free_persons_toolbar select{min-height:38px;border:1px solid #cad8dd;border-radius:8px;padding:6px 10px;font:inherit;background:#fbfdfd}
+.free_persons_views{display:flex;gap:4px;padding:3px;border:1px solid #e5e5e5;border-radius:8px}
+.free_persons_views a{padding:7px 12px;border-radius:6px;color:#666;font-weight:700;font-size:13px;text-decoration:none}
+.free_persons_views a[aria-current]{background:var(--main_color,#0093a5);color:#fff}
+.free_persons_results{display:grid;gap:12px;margin-top:16px}
+.free_persons_results.is_grid{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.free_person_card{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px 12px;align-items:center;padding:12px;border:1px solid #e5e5e5;border-radius:10px;background:#fff}
+.free_person_card.is_hidden{opacity:.7}
+.free_person_card img{width:56px;height:56px;border-radius:50%;object-fit:cover;background:#eef4f6}
+.free_person_text{display:grid;gap:2px;min-width:0}
+.free_person_text strong{color:#00353c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.free_person_text span,.free_person_text small{color:#777;font-size:12px}
+.free_person_actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px}
+.free_person_actions .tree_secondary_action,.free_person_actions .tree_primary_action{min-height:32px;padding:0 10px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
+.free_persons_results.is_list .free_person_card{grid-template-columns:56px minmax(0,1fr) auto}
+.free_persons_results.is_list .free_person_actions{grid-column:auto;justify-content:flex-end}
+.free_persons_empty{padding:32px;text-align:center;border:1px dashed #ccc;border-radius:10px;color:#777}
+.free_persons_pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:18px;color:#666}
+@media(max-width:700px){.free_persons_head{display:block}.free_persons_results.is_list .free_person_card{grid-template-columns:56px minmax(0,1fr)}.free_persons_results.is_list .free_person_actions{grid-column:1/-1;justify-content:flex-start}}

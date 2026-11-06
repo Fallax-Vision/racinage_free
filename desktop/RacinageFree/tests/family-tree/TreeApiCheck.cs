@@ -37,7 +37,8 @@ namespace RacinageFreeDesktop {
       return store;
     }
 
-    private static int Serve(string root) {
+    private static int Serve(string root, string lang) {
+      if (lang != "") { CultureInfo culture = CultureInfo.GetCultureInfo(lang); CultureInfo.DefaultThreadCurrentUICulture = culture; Thread.CurrentThread.CurrentUICulture = culture; }
       StartIsolated(root);
       Console.WriteLine("Serving " + baseUrl + " session=" + session);
       Thread.Sleep(Timeout.Infinite);
@@ -146,6 +147,18 @@ namespace RacinageFreeDesktop {
       Check(Ok(result, "toggle_life_status") && Json.Serialize(result["person_patch"]).Contains("\"is_deceased\":true"), "mark dead with unknown date");
       Ok(Act("set_sibling_status", "person_id", eve.ToString(), "sibling_value", "yes"), "set_sibling_status");
 
+      // Hosted 5affe7a: the partner flagged as the family's child takes the couple's parent links and birth position.
+      result = Act("add_spouse", "anchor_person_id", cain.ToString(), "person_source", "new", "person_first_name", "Ada", "family_sibling_person", "anchor");
+      int ada = PersonId((string)result["tree_html"], "Ada");
+      using (SqliteDbHandle db = new SqliteDbHandle(store)) db.Execute("UPDATE relationships SET sibling_person_id=? WHERE person1_id=? AND person2_id=?", ada, cain, ada);
+      result = Act("list_sibling_orders", "person_id", ada.ToString());
+      string siblingsJson = Json.Serialize(result["siblings"]);
+      Check(Ok(result, "list_sibling_orders falls back to the partner's parents") && siblingsJson.Contains("\"id\":" + abel + ",") && !siblingsJson.Contains("\"id\":" + cain + ","), "sibling list uses the partner's parents and hides that partner");
+      Ok(Act("update_person", "person_id", ada.ToString(), "person_first_name", "Ada", "person_gender", "F"), "update_person repairs the couple");
+      Check(true.Equals(((Dictionary<string, object>)Act("get_person", "person_id", ada.ToString())["person"])["is_child"]) && false.Equals(((Dictionary<string, object>)Act("get_person", "person_id", cain.ToString())["person"])["is_child"]), "parent links moved to the flagged partner");
+      Ok(Act("set_sibling_status", "person_id", ada.ToString(), "sibling_value", "no"), "set_sibling_status back to the other partner");
+      Check(true.Equals(((Dictionary<string, object>)Act("get_person", "person_id", cain.ToString())["person"])["is_child"]), "set_sibling_status moves the parent links back");
+
       // Media: profile photo upload, serve, remove (kept in the private gallery), gallery upload, file streaming.
       result = Post("/includes/tree_save.include.php", new Dictionary<string, string> { { "action", "update_person" }, { "tree_long_id", treeId }, { "person_id", eve.ToString() }, { "person_first_name", "Eve" }, { "person_last_name", "Root" }, { "person_gender", "F" } }, "person_image", Png(Color.SteelBlue));
       Ok(result, "profile photo upload");
@@ -194,6 +207,11 @@ namespace RacinageFreeDesktop {
       treeId = firstTree;
       Ok(Act("remove_person_from_tree", "person_id", seth.ToString(), "remove_mode", "relationships"), "remove_person_from_tree");
       Ok(Act("rename_tree", "name", "Root family"), "rename_tree");
+      page = Http("GET", "/persons?q=Ab", null, null, out status);
+      Check(status == 200 && page.Contains("data-person-name=\"Abel\"") && !page.Contains("data-person-name=\"Cain\""), "Manage Persons search");
+      Check(Http("GET", "/persons?view=list", null, null, out status).Contains("free_persons_results is_list"), "Manage Persons list view");
+      string abelLong = Regex.Match(page, "data-person-long-id=\"([^\"]+)\" data-person-id=\"" + abel + "\"").Groups[1].Value;
+      Check(Ok((Dictionary<string, object>)Json.DeserializeObject(Http("GET", "/includes/persons.include.php?action=details&person=" + abelLong, null, null, out status)), "persons details") , "read-only person details");
 
       // 500+ people: three generations under one couple, then render it.
       using (SqliteDbHandle db = new SqliteDbHandle(store)) {

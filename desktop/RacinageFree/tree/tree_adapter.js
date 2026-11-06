@@ -45,6 +45,67 @@
     dialog.showModal(); close.focus();
     return dialog;
   };
+  // Port of the hosted global backdrop handler (includes/js/script.js): clicking outside a popup presses its
+  // close button, never its back arrow, so Update Person closes without reopening the person popup.
+  document.addEventListener('click', event => {
+    if (event.target instanceof HTMLDialogElement && event.target.open) {
+      const bounds = event.target.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) event.target.close();
+      return;
+    }
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains('racinage_modal_backdrop') || !event.target.isConnected) return;
+    const close = event.target.querySelector('[data-modal-close], [data-dialog-close], [data-popup-close], .tree_modal_close:not(.tree_modal_back), button[aria-label="Close"], button[aria-label="Fermer"]');
+    if (close) close.click();
+    else {
+      event.target.classList.remove('open', 'visible');
+      event.target.hidden = true;
+      event.target.setAttribute('aria-hidden', 'true');
+    }
+  });
+  // Manage Persons: the read-only hosted person popup, and Add to tree (an empty tree takes the person as first
+  // member; otherwise the tree opens with the Existing search filled in for the next + button).
+  const i18n = key => (window.RACINAGE_TREE_I18N || {})[key] || key;
+  document.addEventListener('click', async event => {
+    const card = event.target.closest('.free_person_card');
+    const page = document.querySelector('.free_persons');
+    if (!card || !page) return;
+    if (event.target.closest('[data-free-person-details]')) {
+      const response = await fetch('/includes/persons.include.php?action=details&person=' + encodeURIComponent(card.dataset.personLongId), { credentials: 'same-origin' });
+      const payload = await response.json().catch(() => ({}));
+      if (!payload.ok) { window.racinageShowFeedback(payload.message || i18n('Could Not Load Person'), 'fail'); return; }
+      window.racinageTreePersonDetailsModal?.open({ modal: document.getElementById('treePersonModal'), person: payload.person, editing: false, generation: '', translate: i18n, returnFocus: event.target });
+      return;
+    }
+    if (!event.target.closest('[data-free-person-add]')) return;
+    const option = page.querySelector('[data-free-persons-tree]')?.selectedOptions[0];
+    if (!option) return;
+    if (option.dataset.empty === 'true') {
+      const data = new FormData();
+      data.set('action', 'add_first_member'); data.set('tree_long_id', option.value);
+      data.set('person_source', 'existing'); data.set('existing_person_id', card.dataset.personId);
+      const response = await fetch('/includes/tree_save.include.php', { method: 'POST', body: data, credentials: 'same-origin', headers: { 'X-Racinage-CSRF': page.dataset.personsCsrf || '' } });
+      const payload = await response.json().catch(() => ({}));
+      if (!payload.ok) { window.racinageShowFeedback(payload.message || i18n('Tree Action Failed'), 'fail'); return; }
+    }
+    const url = new URL('/trees', location.href);
+    url.searchParams.set('tree', option.value);
+    if (option.dataset.empty === 'true') url.searchParams.set('p', card.dataset.personId);
+    else url.searchParams.set('add_name', card.dataset.personName);
+    location.href = url.href;
+  });
+  const addName = new URLSearchParams(location.search).get('add_name');
+  if (addName) {
+    const hint = () => window.racinageShowFeedback(i18n('Choose a + button on the tree, then Existing, to place this person.'), 'info');
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hint); else hint();
+    // When an add form opens on the Existing tab, search for the chosen person.
+    new MutationObserver(() => {
+      const modal = document.getElementById('treeActionModal');
+      const search = document.getElementById('treeExistingPersonSearch');
+      if (!modal?.classList.contains('open') || !search || search.value === addName || document.getElementById('treeExistingPersonSection')?.hidden) return;
+      search.value = addName;
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+  }
   // The hosted view preference is saved by its global script; Free keeps it with the other tree settings.
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-view-preference="trees"] [data-tree-view]');

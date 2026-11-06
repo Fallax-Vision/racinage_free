@@ -86,6 +86,72 @@ namespace RacinageFreeDesktop {
       }
     }
 
+    // ---------- Manage Persons (single local family) ----------
+    internal string PersonsPageHtml(string query, string view, string pageValue, string requestedTree) {
+      using (SqliteDb db = Open()) {
+        query = (query ?? "").Trim(); if (query.Length > 100) query = query.Substring(0, 100);
+        view = view == "list" ? "list" : "grid";
+        int page; Int32.TryParse(pageValue, out page); page = Math.Max(1, page);
+        List<Dictionary<string, string> > trees = db.Query("SELECT id,long_id,name,root_person_id FROM family_trees WHERE status='active' ORDER BY id");
+        Dictionary<string, string> selected = SelectedTree(db, requestedTree);
+        Dictionary<int, List<Dictionary<string, string> > > memberships = new Dictionary<int, List<Dictionary<string, string> > >();
+        foreach (Dictionary<string, string> tree in trees)
+          foreach (int id in TreeMemberIds(db, QI(tree, "id"))) { List<Dictionary<string, string> > list; if (!memberships.TryGetValue(id, out list)) memberships[id] = list = new List<Dictionary<string, string> >(); list.Add(tree); }
+        string like = "%" + query.Replace("=", "==").Replace("%", "=%").Replace("_", "=_") + "%";
+        int total = QI(db.QueryOne("SELECT COUNT(*) AS n FROM persons WHERE (coalesce(first_name,'')||' '||coalesce(last_name,'')) LIKE ? ESCAPE '='", like), "n");
+        const int size = 24;
+        int pages = Math.Max(1, (total + size - 1) / size); page = Math.Min(page, pages);
+        List<Dictionary<string, string> > people = db.Query("SELECT * FROM persons WHERE (coalesce(first_name,'')||' '||coalesce(last_name,'')) LIKE ? ESCAPE '=' ORDER BY first_name COLLATE NOCASE,last_name COLLATE NOCASE,id LIMIT ? OFFSET ?", like, size, (page - 1) * size);
+        Func<string, string> t = TreeText.H;
+        string treeId = Q(selected, "long_id");
+        Func<string, int, string> link = (v, p) => "/persons?q=" + Uri.EscapeDataString(query) + "&amp;view=" + v + "&amp;page=" + N(p) + "&amp;tree=" + Uri.EscapeDataString(treeId);
+        StringBuilder html = new StringBuilder("<div id=\"main_container\" class=\"free_persons\" data-persons-csrf=\"" + E(CsrfToken) + "\">");
+        html.Append("<script>window.RACINAGE_TREE_I18N = " + new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.Serialize(TreeText.All).Replace("</", "<\\/") + ";</script>");
+        html.Append("<section class=\"free_persons_head\"><div><h1>" + t("Manage Persons") + "</h1><p>" + E(TreeText.T("%s persons").Replace("%s", N(total))) + "</p></div><a class=\"tree_secondary_action\" href=\"/trees?tree=" + Uri.EscapeDataString(treeId) + "\">" + t("Back to tree") + "</a></section>");
+        html.Append("<form class=\"free_persons_toolbar\" method=\"get\" action=\"/persons\" role=\"search\"><input type=\"hidden\" name=\"view\" value=\"" + view + "\">");
+        html.Append("<label><span>" + t("Search people") + "</span><input type=\"search\" name=\"q\" value=\"" + E(query) + "\" placeholder=\"" + t("Search by name") + "\" autocomplete=\"off\"></label>");
+        html.Append("<label><span>" + t("Family tree") + "</span><select name=\"tree\" data-free-persons-tree>");
+        foreach (Dictionary<string, string> tree in trees)
+          html.Append("<option value=\"" + E(Q(tree, "long_id")) + "\"" + (Q(tree, "long_id") == treeId ? " selected" : "") + " data-empty=\"" + (QI(tree, "root_person_id") > 0 ? "false" : "true") + "\">" + E(Q(tree, "name")) + "</option>");
+        html.Append("</select></label><button type=\"submit\" class=\"tree_primary_action\">" + t("Apply") + "</button>");
+        html.Append("<nav class=\"free_persons_views\" aria-label=\"" + t("Layout") + "\"><a href=\"" + link("grid", page) + "\"" + (view == "grid" ? " aria-current=\"page\"" : "") + ">" + t("Grid") + "</a><a href=\"" + link("list", page) + "\"" + (view == "list" ? " aria-current=\"page\"" : "") + ">" + t("List") + "</a></nav></form>");
+        html.Append("<div class=\"free_persons_results is_" + view + "\">");
+        foreach (Dictionary<string, string> person in people) {
+          int id = QI(person, "id");
+          string gender = Q(person, "gender") == "" ? "M" : Q(person, "gender"), name = (Q(person, "first_name") + " " + Q(person, "last_name")).Trim();
+          string birth = CleanDate(Q(person, "birth_date")) ?? "", death = CleanDate(Q(person, "death_date")) ?? "";
+          string dates = (birth == "" ? "?" : birth.Substring(0, 4)) + " - " + (death != "" ? death.Substring(0, 4) : TreeText.T(Deceased(person) ? "Deceased - date unknown" : "Present"));
+          List<Dictionary<string, string> > member; memberships.TryGetValue(id, out member);
+          html.Append("<article class=\"free_person_card" + (Q(person, "visibility") == "hidden" ? " is_hidden" : "") + "\" data-person-long-id=\"" + E(Q(person, "long_id")) + "\" data-person-id=\"" + N(id) + "\" data-person-name=\"" + E(name) + "\">");
+          html.Append("<img src=\"" + PersonImageUrl(Q(person, "image_name"), gender, "sm") + "\" alt=\"\" width=\"56\" height=\"56\" loading=\"lazy\">");
+          html.Append("<div class=\"free_person_text\"><strong>" + E(name) + "</strong><span>" + E(dates) + "</span><small>" + (member == null ? t("Not in a tree") : E(String.Join(", ", member.Select(tree => Q(tree, "name"))))) + "</small></div>");
+          html.Append("<div class=\"free_person_actions\"><button type=\"button\" class=\"tree_secondary_action\" data-free-person-details>" + t("Details") + "</button>");
+          Dictionary<string, string> placed = member == null ? null : (member.FirstOrDefault(tree => Q(tree, "long_id") == treeId) ?? member[0]);
+          if (placed != null) html.Append("<a class=\"tree_secondary_action\" href=\"/trees?tree=" + Uri.EscapeDataString(Q(placed, "long_id")) + "&amp;p=" + N(id) + "\">" + t("Show on tree") + "</a>");
+          if (member == null || member.All(tree => Q(tree, "long_id") != treeId)) html.Append("<button type=\"button\" class=\"tree_primary_action\" data-free-person-add>" + t("Add to tree") + "</button>");
+          html.Append("</div></article>");
+        }
+        if (people.Count == 0) html.Append("<p class=\"free_persons_empty\">" + t("No people found.") + "</p>");
+        html.Append("</div>");
+        if (pages > 1) {
+          html.Append("<nav class=\"free_persons_pagination\" aria-label=\"" + t("Pagination") + "\">");
+          if (page > 1) html.Append("<a class=\"tree_secondary_action\" href=\"" + link(view, page - 1) + "\">" + t("Previous") + "</a>");
+          string label = TreeText.T("Page %s of %s"); int split = label.IndexOf("%s", StringComparison.Ordinal);
+          html.Append("<span>" + E(split >= 0 ? label.Substring(0, split) + N(page) + label.Substring(split + 2).Replace("%s", N(pages)) : label) + "</span>");
+          if (page < pages) html.Append("<a class=\"tree_secondary_action\" href=\"" + link(view, page + 1) + "\">" + t("Next") + "</a>");
+          html.Append("</nav>");
+        }
+        // The read-only person popup and private gallery reuse the tree page markup, without the edit actions.
+        if (pageTemplate == null) pageTemplate = File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tree", "tree_page.html"), Encoding.UTF8);
+        int start = pageTemplate.IndexOf("<div class=\"racinage_modal_backdrop tree_modal_backdrop\" id=\"treePersonModal\"", StringComparison.Ordinal);
+        int end = pageTemplate.IndexOf("<div class=\"racinage_modal_backdrop tree_modal_backdrop\" id=\"treeStatsModal\"", StringComparison.Ordinal);
+        string modals = Regex.Replace(pageTemplate.Substring(start, end - start), "<div class=\"tree_person_actions\">.*?</div>", "", RegexOptions.Singleline);
+        Dictionary<string, string> values = new Dictionary<string, string> { { "back_icon", BackIcon }, { "csrf", E(CsrfToken) }, { "gallery_i18n", E(new JavaScriptSerializer().Serialize(TreeText.All)) } };
+        html.Append(Regex.Replace(modals, @"\{\{(t:)?([^{}]+)\}\}", m => m.Groups[1].Success ? TreeText.H(m.Groups[2].Value) : values.ContainsKey(m.Groups[2].Value) ? values[m.Groups[2].Value] : ""));
+        return html.Append("</div>").ToString();
+      }
+    }
+
     internal string TreePickerHtml(string requestedTree, string requestedPartial, string requestedTemporary, string query) {
       using (SqliteDb db = Open()) {
         Dictionary<string, string> tree = SelectedTree(db, requestedTree);
@@ -284,6 +350,13 @@ namespace RacinageFreeDesktop {
     }
 
     internal Dictionary<string, object> TreeRemovePhoto(TreeRequest r, string csrf) {
+      if (r["action"] == "details") {
+        using (SqliteDb db = Open()) {
+          int id = QI(db.QueryOne("SELECT id FROM persons WHERE long_id=?", r["person"]), "id");
+          if (id == 0) throw Fail("Person not found.", 404);
+          return Ok("", new Dictionary<string, object> { { "person", BasePerson(db, id) } });
+        }
+      }
       if (r["action"] != "remove_photo") throw Fail("Unknown action.", 400);
       if (!CheckCsrf(csrf)) throw Fail("Your session token expired. Refresh the page and try again.", 403);
       using (SqliteDb db = Open()) {

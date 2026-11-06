@@ -66,7 +66,7 @@ namespace RacinageFreeDesktop {
         return true;
       }
       if (path == "/media/images/default_male.webp" || path == "/media/images/default_female.webp") { WriteFile(context, "tree\\" + path.Substring(14), "image/webp"); return true; }
-      bool page = (path == "/family" || path == "/trees") && context.Request.HttpMethod == "GET";
+      bool page = (path == "/family" || path == "/trees" || path == "/persons") && context.Request.HttpMethod == "GET";
       bool api = path == "/includes/tree_save.include.php" || path == "/includes/person_gallery.include.php" || path == "/includes/persons.include.php";
       bool photo = path.StartsWith("/media/images/persons/", StringComparison.Ordinal);
       if (!page && !api && !photo) return false;
@@ -79,7 +79,7 @@ namespace RacinageFreeDesktop {
       if (photo) { TreePhoto(context, path.Substring(22)); return true; }
       if (page) {
         if (context.Request.QueryString["tree_picker"] == "1") { WriteHtml(context, store.TreePickerHtml(context.Request.QueryString["tree"] ?? "", context.Request.QueryString["partial"] ?? "", context.Request.QueryString["partial_temp"] ?? "", context.Request.QueryString["tree_picker_query"] ?? "")); return true; }
-        WriteHtml(context, TreePage(context));
+        WriteHtml(context, path == "/persons" ? TreeShell(TreeText.T("Manage Persons"), store.PersonsPageHtml(context.Request.QueryString["q"] ?? "", context.Request.QueryString["view"] ?? "", context.Request.QueryString["page"] ?? "", context.Request.QueryString["tree"] ?? ""), "free_persons_body") : TreePage(context));
         return true;
       }
       TreeRequest request;
@@ -190,11 +190,14 @@ namespace RacinageFreeDesktop {
     }
 
     private string TreePage(HttpListenerContext context) {
+      return TreeShell(TreeText.T("Family Tree"), store.TreePageHtml(context.Request.QueryString["tree"] ?? "", context.Request.QueryString["partial"] ?? "", context.Request.QueryString["partial_temp"] ?? "", context.Request.QueryString["p"] ?? ""), "");
+    }
+
+    private string TreeShell(string title, string body, string bodyClass) {
       string v = Uri.EscapeDataString(PortablePaths.Version);
-      string body = store.TreePageHtml(context.Request.QueryString["tree"] ?? "", context.Request.QueryString["partial"] ?? "", context.Request.QueryString["partial_temp"] ?? "", context.Request.QueryString["p"] ?? "");
       return "<!doctype html><html lang='" + TreeText.Lang + "'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='app-root' content='/'>" +
-        "<title>" + TreeText.H("Family Tree") + " - Racinage Free</title><style>" + Css() + "</style>" +
-        "<link rel='stylesheet' href='/tree-assets/tree.css?v=" + v + "'><link rel='stylesheet' href='/tree-assets/tree_adapter.css?v=" + v + "'></head><body class='racinage_free_tree'>" +
+        "<title>" + FamilyTreeRenderer.H(title) + " - Racinage Free</title><style>" + Css() + "</style>" +
+        "<link rel='stylesheet' href='/tree-assets/tree.css?v=" + v + "'><link rel='stylesheet' href='/tree-assets/tree_adapter.css?v=" + v + "'></head><body class='racinage_free_tree " + bodyClass + "'>" +
         "<header id='header'><a class='brand' href='/'>Racinage Free</a><nav><a href='/'>Home</a><a href='/family'>Dashboard</a><a href='/messages'>Messages</a><a href='/calendar'>Calendar</a><a href='/manage'>Manage</a><a href='" + PortablePaths.PricingUrl + "'>Upgrade</a></nav></header>" +
         body +
         "<script>window.ROOT='';</script><script src='/tree-assets/tree_adapter.js?v=" + v + "'></script><script src='/tree-assets/profile_crop.js?v=" + v + "'></script><script src='/tree-assets/person_profile_photo.js?v=" + v + "'></script>" +
@@ -496,6 +499,29 @@ namespace RacinageFreeDesktop {
       return db.Query("SELECT person1_id,person2_id FROM relationships WHERE family_tree_id=? AND relationship_type='spouse' AND (person1_id=?2 OR person2_id=?2) ORDER BY id", treeId, personId)
         .Select(row => QI(row, "person1_id") == personId ? QI(row, "person2_id") : QI(row, "person1_id")).Where(id => id > 0).Distinct().ToList();
     }
+    // Port of hosted tree_couple_sibling_parents: the partner flagged as this family's child owns the couple's
+    // parent links. Returns (other partner, their parents) when the flagged partner has none here but the other does.
+    private static Tuple<int, List<int> > CoupleSiblingParents(SqliteDb db, int treeId, int personId) {
+      Dictionary<string, string> relationship = SpouseRelationship(db, treeId, personId);
+      if (relationship == null) return null;
+      int siblingId = QI(relationship, "sibling_person_id") > 0 ? QI(relationship, "sibling_person_id") : QI(relationship, "person1_id");
+      if (siblingId != personId || ParentIds(db, treeId, personId).Count > 0) return null;
+      int other = QI(relationship, "person1_id") == personId ? QI(relationship, "person2_id") : QI(relationship, "person1_id");
+      List<int> parents = ParentIds(db, treeId, other);
+      return parents.Count > 0 ? Tuple.Create(other, parents) : null;
+    }
+    // Port of hosted tree_sync_couple_sibling: move those parent links and the birth position to the flagged partner.
+    private static void SyncCoupleSibling(SqliteDb db, int treeId, int personId) {
+      Tuple<int, List<int> > move = CoupleSiblingParents(db, treeId, personId);
+      if (move == null) return;
+      db.Execute("UPDATE OR IGNORE parent_child SET child_id=? WHERE family_tree_id=? AND child_id=?", personId, treeId, move.Item1);
+      db.Execute("DELETE FROM parent_child WHERE family_tree_id=? AND child_id=?", treeId, move.Item1);
+      int order = QI(db.QueryOne("SELECT sibling_birth_order FROM family_tree_person_settings WHERE family_tree_id=? AND person_id=?", treeId, move.Item1), "sibling_birth_order");
+      if (order <= 0) return;
+      db.Execute("INSERT INTO family_tree_person_settings(family_tree_id,person_id,sibling_birth_order,created_at,updated_at)VALUES(?,?,?,?,?) ON CONFLICT(family_tree_id,person_id) DO UPDATE SET sibling_birth_order=excluded.sibling_birth_order,updated_at=excluded.updated_at", treeId, personId, order, Now(), Now());
+      db.Execute("UPDATE family_tree_person_settings SET sibling_birth_order=NULL WHERE family_tree_id=? AND person_id=?", treeId, move.Item1);
+    }
+
     private static void UpdateRootIfNeeded(SqliteDb db, int treeId) {
       if (QI(db.QueryOne("SELECT root_person_id FROM family_trees WHERE id=?", treeId), "root_person_id") > 0) return;
       Dictionary<string, string> row = db.QueryOne("SELECT person_id FROM (SELECT parent_id AS person_id FROM parent_child WHERE family_tree_id=?1 UNION SELECT child_id FROM parent_child WHERE family_tree_id=?1 UNION SELECT person1_id FROM relationships WHERE family_tree_id=?1 UNION SELECT person2_id FROM relationships WHERE family_tree_id=?1) x WHERE person_id IS NOT NULL LIMIT 1", treeId);
@@ -728,14 +754,19 @@ namespace RacinageFreeDesktop {
           tree = RequireTree(db, r); treeId = QI(tree, "id");
           int personId = r.Int("person_id"), anchor = r.Int("anchor_person_id");
           List<int> parents;
-          if (personId > 0 && InTree(db, treeId, personId)) parents = ParentIds(db, treeId, personId);
+          int hidden = 0;
+          if (personId > 0 && InTree(db, treeId, personId)) {
+            parents = ParentIds(db, treeId, personId);
+            Tuple<int, List<int> > move = parents.Count > 0 ? null : CoupleSiblingParents(db, treeId, personId);
+            if (move != null) { parents = move.Item2; hidden = move.Item1; }
+          }
           else if (anchor > 0 && InTree(db, treeId, anchor)) parents = AddChildParentIds(db, treeId, anchor, r.Int("second_parent_id"));
           else throw Fail("Person not found.");
           Dictionary<int, int?> orders = SiblingOrders(db, treeId, parents);
           List<Dictionary<string, object> > siblings = new List<Dictionary<string, object> >();
           if (orders.Count > 0)
             foreach (Dictionary<string, string> row in db.Query("SELECT id,first_name,last_name,gender,image_name FROM persons WHERE id IN (" + String.Join(",", orders.Keys) + ") ORDER BY id"))
-              if (QI(row, "id") != personId) siblings.Add(new Dictionary<string, object> { { "id", QI(row, "id") }, { "name", (Q(row, "first_name") + " " + Q(row, "last_name")).Trim() }, { "image_url", PersonImageUrl(Q(row, "image_name"), Q(row, "gender"), "sm") }, { "order", orders[QI(row, "id")] } });
+              if (QI(row, "id") != personId && QI(row, "id") != hidden) siblings.Add(new Dictionary<string, object> { { "id", QI(row, "id") }, { "name", (Q(row, "first_name") + " " + Q(row, "last_name")).Trim() }, { "image_url", PersonImageUrl(Q(row, "image_name"), Q(row, "gender"), "sm") }, { "order", orders[QI(row, "id")] } });
           return Ok("", new Dictionary<string, object> { { "siblings", siblings }, { "has_parents", parents.Count > 0 } });
         }
         case "update_person": {
@@ -753,6 +784,7 @@ namespace RacinageFreeDesktop {
           args.Add(extra["is_deceased"]); args.Add(Now()); args.Add(personId);
           db.Execute("UPDATE persons SET first_name=?,last_name=?,gender=?," + String.Join(",", ExtraColumns.Select(c => c + "=?")) + ",is_deceased=COALESCE(?,is_deceased),updated_at=? WHERE id=?", args.ToArray());
           ApplyPersonUpload(db, personId, r.File("person_image"));
+          SyncCoupleSibling(db, QI(tree, "id"), personId);
           SaveSiblingBirthOrder(db, QI(tree, "id"), personId, r);
           return Success(db, "Person updated.", Q(tree, "long_id"), personId, true, r);
         }
@@ -772,7 +804,9 @@ namespace RacinageFreeDesktop {
           Dictionary<string, string> relationship = SpouseRelationship(db, treeId, personId);
           if (relationship == null) throw Fail("Only people in a couple can change sibling status.");
           int other = QI(relationship, "person1_id") == personId ? QI(relationship, "person2_id") : QI(relationship, "person1_id");
-          db.Execute("UPDATE relationships SET sibling_person_id=? WHERE id=? AND family_tree_id=?", r["sibling_value"] == "no" ? other : personId, QI(relationship, "id"), treeId);
+          int siblingId = r["sibling_value"] == "no" ? other : personId;
+          db.Execute("UPDATE relationships SET sibling_person_id=? WHERE id=? AND family_tree_id=?", siblingId, QI(relationship, "id"), treeId);
+          SyncCoupleSibling(db, treeId, siblingId);
           return Success(db, "Sibling status updated.", Q(tree, "long_id"), personId, false, r);
         }
         case "replace_person": {
@@ -1035,10 +1069,8 @@ namespace RacinageFreeDesktop {
     }
 
     // ---------- person details ----------
-    private Dictionary<string, object> GetPerson(SqliteDb db, TreeRequest r) {
-      Dictionary<string, string> tree = TreeByLongId(db, r["tree_long_id"]);
-      int personId = r.Int("person_id"), treeId = QI(tree, "id");
-      if (tree == null || personId == 0 || !InTree(db, treeId, personId)) throw Fail("Person not found.");
+    // Profile fields shared by get_person and the persons directory details popup.
+    private static Dictionary<string, object> BasePerson(SqliteDb db, int personId) {
       Dictionary<string, string> row = db.QueryOne("SELECT id,long_id,first_name,last_name,gender,image_name,birth_date,death_date,is_deceased,visibility,marital_status,phone1,phone2,email1,email2,address,birth_place,nationality,blood_group,education_level,religion,website,updated_at FROM persons WHERE id=?", personId);
       if (row == null) throw Fail("Person not found.");
       Dictionary<string, object> person = new Dictionary<string, object>();
@@ -1048,6 +1080,14 @@ namespace RacinageFreeDesktop {
       person["creator_user_name"] = ""; person["updater_user_name"] = ""; person["username"] = "";
       person["image_url"] = PersonImageUrl(Q(row, "image_name"), gender, ""); person["image_sm_url"] = PersonImageUrl(Q(row, "image_name"), gender, "sm"); person["image_lg_url"] = PersonImageUrl(Q(row, "image_name"), gender, "lg");
       person["gallery_preview"] = GallerySummary(db, personId, 5); person["gallery_can_manage"] = true;
+      return person;
+    }
+
+    private Dictionary<string, object> GetPerson(SqliteDb db, TreeRequest r) {
+      Dictionary<string, string> tree = TreeByLongId(db, r["tree_long_id"]);
+      int personId = r.Int("person_id"), treeId = QI(tree, "id");
+      if (tree == null || personId == 0 || !InTree(db, treeId, personId)) throw Fail("Person not found.");
+      Dictionary<string, object> person = BasePerson(db, personId);
       // tree_person_tree_context
       person["has_children"] = db.QueryOne("SELECT 1 AS x FROM parent_child WHERE family_tree_id=? AND parent_id=?", treeId, personId) != null;
       person["is_child"] = db.QueryOne("SELECT 1 AS x FROM parent_child WHERE family_tree_id=? AND child_id=?", treeId, personId) != null;

@@ -28,14 +28,12 @@ $sourcePaths = array_merge(array_map(fn($f) => "$hosted/$f", $sources), glob("$h
 foreach ($sourcePaths as $source) {
     $text = $read($source);
     preg_match_all('/\{\{t:([^}]+)\}\}/', $text, $templateKeys);
-    if (str_ends_with($source, '.cs')) {
-        // C# strings hold single-quoted HTML, so quote pairing is unreliable: look each known key up instead.
-        foreach (array_keys($en + $fr) as $key) if (str_contains($text, '"' . $key . '"')) $keys[$key] = true;
-        continue;
-    }
-    preg_match_all('/\'((?:[^\'\\\\]|\\\\.){1,400})\'|"((?:[^"\\\\$]|\\\\.){1,400})"/', $text, $matches, PREG_SET_ORDER);
-    foreach (array_merge($templateKeys[1], array_map(fn($m) => stripslashes($m[1] !== '' ? $m[1] : ($m[2] ?? '')), $matches)) as $key) {
-        if ($key !== '' && (isset($en[$key]) || isset($fr[$key]))) $keys[$key] = true;
+    foreach ($templateKeys[1] as $key) if (isset($en[$key]) || isset($fr[$key])) $keys[$key] = true;
+    // Quote pairing is unreliable across PHP, JS and C# (HTML attributes, apostrophes), so each known key is
+    // looked up as a quoted literal instead.
+    foreach (array_keys($en + $fr) as $key) {
+        $key = (string)$key;
+        if ($key !== '' && (str_contains($text, "'" . str_replace("'", "\\'", $key) . "'") || str_contains($text, '"' . str_replace('"', '\\"', $key) . '"'))) $keys[$key] = true;
     }
 }
 foreach (['Birthday', 'Death anniversary', 'Page %s of %s', 'Pagination', 'Family Tree', 'Manage Persons', 'Trees'] as $key) if (isset($en[$key])) $keys[$key] = true;

@@ -12,7 +12,7 @@ namespace RacinageFreeDesktop {
     private static int failures;
 
     private static int Main(string[] args) {
-      if (args.Length > 0 && args[0] == "--serve") return Serve(args.Length > 1 ? args[1] : "");
+      if (args.Length > 0 && args[0] == "--serve") return Serve(args.Length > 1 ? args[1] : "", args.Length > 2 ? args[2] : "");
       string fixtures = args.Length > 0 ? args[0] : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fixtures");
       try {
         CheckGolden(fixtures);

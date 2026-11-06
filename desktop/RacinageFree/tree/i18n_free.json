@@ -22,6 +22,12 @@
     "Partial Tree updated.": "Arbre partiel mis à jour.",
     "No Family Tree": "Aucun arbre familial",
     "Unknown action.": "Action inconnue.",
-    "Could not add person to this tree.": "Impossible d’ajouter la personne à cet arbre."
+    "Could not add person to this tree.": "Impossible d’ajouter la personne à cet arbre.",
+    "Phone": "Téléphone",
+    "%s persons": "%s personnes",
+    "Back to tree": "Retour à l’arbre",
+    "Not in a tree": "Dans aucun arbre",
+    "Add to tree": "Ajouter à l’arbre",
+    "Choose a + button on the tree, then Existing, to place this person.": "Choisissez un bouton + dans l’arbre, puis Existant, pour placer cette personne."
   }
 }

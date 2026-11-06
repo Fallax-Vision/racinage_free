@@ -1,17 +1,18 @@
 {
   "name": "Racinage Free",
-  "source_version": "0.17.0",
-  "source_release_status": "blocked_until_trusted_windows_signing_is_configured",
+  "source_version": "0.18.0",
+  "source_release_status": "published_unsigned_until_trusted_windows_signing_is_configured",
   "development_artifact": {
     "status": "unpublished_unsigned",
-    "path": "desktop/RacinageFree/dist/development/RacinageFree-v0.17.0-dev.exe",
-    "sha256": "4b86e080f99b9fcf5b6b26708fc61eeef2c6de4ba5667e9c58f0d07d7ba57fad",
-    "bytes": 2257920
+    "path": "desktop/RacinageFree/dist/development/RacinageFree-v0.18.0-dev.exe",
+    "sha256": "e23300f03382139c5d43684943a69369257b53e82ebf61c9e8a9f47bc1f8c761",
+    "bytes": 2270720
   },
-  "version": "0.15.0",
-  "tag": "racinage-free-v0.15.0",
-  "artifact": "releases/desktop/racinage-free-v0.15.0/RacinageFree-v0.15.0.exe",
-  "sha256": "9f2e09ea9875865cdccfdd7a5948a713aa657ebc8fce43a64c77ea8ea81b2abd",
-  "bytes": 2462720,
+  "version": "0.18.0",
+  "tag": "racinage-free-v0.18.0",
+  "artifact": "https://github.com/Fallax-Vision/racinage_free/releases/download/racinage-free-v0.18.0/RacinageFree-v0.18.0.exe",
+  "sha256": "e23300f03382139c5d43684943a69369257b53e82ebf61c9e8a9f47bc1f8c761",
+  "bytes": 2270720,
+  "signed": false,
   "license": "MIT"
 }

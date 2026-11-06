@@ -87,7 +87,7 @@ namespace RacinageFreeDesktop {
   }
 
   internal static class PortablePaths {
-    internal const string Version = "0.17.0";
+    internal const string Version = "0.18.0";
     internal const string AppName = "Racinage Free";
     internal const string PricingUrl = "https://racinage.com/pricing";
     internal const string PluginCatalogUrl = "https://plugins.racinage.com/api/catalog";
@@ -959,7 +959,7 @@ namespace RacinageFreeDesktop {
       else if (active == "progress") content = ProgressPanel();
       else if (active == "family") {
         Dictionary<string, string> family = store.GetFamily();
-        content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><a class='button' href='/family'>Open family tree</a></div><form method='post' action='/family'>" + CsrfInput() + "<input type='hidden' name='action' value='save_family'>" +
+        content = "<section class='manage-card'><div class='manage-card-head'><div><h2>Family account</h2><p>The local Free edition has one owner-managed family and no collaboration controls.</p></div><span class='actions'><a class='button ghost' href='/persons'>Manage persons</a><a class='button' href='/family'>Open family tree</a></span></div><form method='post' action='/family'>" + CsrfInput() + "<input type='hidden' name='action' value='save_family'>" +
           "<label>Family name<input name='name' value='" + A(family["name"]) + "' required></label>" +
           "<label>Location<input name='location' value='" + A(family["location"]) + "'></label>" +
           "<label>Family story<textarea name='story' rows='5'>" + H(family["story"]) + "</textarea></label>" +

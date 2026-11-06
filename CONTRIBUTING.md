@@ -7,7 +7,7 @@ Thanks for helping Racinage Free. Keep changes focused on the local Windows port
 - Do not add production credentials, hosted database access, private media, or secrets.
 - Keep mutable user data in `%LOCALAPPDATA%\Racinage Free`.
 - Prefer small, readable C# changes over new frameworks.
-- Use `-Development` for local `v0.17.0` builds. Do not publish an unsigned executable or replace the signed `v0.15.0` release.
+- Use `-Development` for local `v0.18.0` builds. Publish executables only as GitHub release assets, and only with the owner's approval; `v0.18.0` was published unsigned by the owner's decision.
 - Keep local AI providers loopback-only, reject redirects, protect optional tokens with Windows DPAPI, and never add cloud fallback.
 - Keep connected messaging fixed to the reviewed HTTPS Racinage API, reject redirects, rely on Windows certificate validation, protect refresh tokens with DPAPI, and encrypt cached content and queued files locally.
 - Hosted passwords and two-factor codes must stay on the hosted browser authorization page. Never collect them in the portable app.
