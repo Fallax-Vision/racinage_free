@@ -3518,7 +3518,8 @@ function familyTreeInitializer() {
     function setPublicShareStatus(message = '', state = '') {
         const status = publicShareForm?.querySelector('[data-public-share-status]');
         if (!status) return;
-        status.textContent = message;
+        status.classList.add('racinage_share_status');
+        status.textContent = message ? `${state === 'success' ? '✅ ' : state === 'error' ? '❌ ' : ''}${message}` : '';
         status.classList.toggle('success', state === 'success');
         status.classList.toggle('error', state === 'error');
     }
