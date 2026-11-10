@@ -2334,7 +2334,7 @@ function familyTreeInitializer() {
 
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
-        if (supportsExisting) setPersonSource('existing');
+        if (supportsExisting && options.source !== 'new') setPersonSource('existing');
         else setPersonSource('new');
         form.querySelector('input:not([type="hidden"]), select')?.focus();
     }
@@ -2834,6 +2834,18 @@ function familyTreeInitializer() {
                 payload = await postTreeAction(data, statsRequest.signal);
             }
             if (statsState !== state || state.treeId !== getActiveTreeId()) return;
+            // Dropdowns for values present in this tree; keep the current choice.
+            Object.entries(payload.filter_options || {}).forEach(([key, values]) => {
+                const select = statsModal.querySelector(`[data-stat-options="${key}"]`);
+                if (!select) return;
+                const current = select.value;
+                const first = select.options[0]?.outerHTML || '';
+                select.innerHTML = first + values.map(value => typeof value === 'object'
+                    ? `<option value="${escapeHTML(value.id)}">${escapeHTML(value.name)}</option>`
+                    : `<option value="${escapeHTML(value)}">${escapeHTML(value)}</option>`).join('');
+                select.value = [...select.options].some(option => option.value === current) ? current : '';
+                select.closest('label').hidden = values.length === 0 && !current;
+            });
             const html = (payload.people || []).map(person => `<button type="button" class="tree_existing_person_card" data-stat-person="${escapeHTML(person.id)}" title="${escapeHTML(person.name)}">
                 <img loading="lazy" src="${escapeHTML(person.image_sm_url || '')}" alt="">
                 <span>${escapeHTML(person.name || t('Person'))}</span>
@@ -2912,6 +2924,10 @@ function familyTreeInitializer() {
         window.clearTimeout(statsTimer); resetStatsSearch(); loadStatsPeople();
     }, { signal: sig }));
     statsRetry?.addEventListener('click', loadStatsPeople, { signal: sig });
+    statsModal?.querySelector('[data-stats-reset]')?.addEventListener('click', () => {
+        statsModal.querySelectorAll('[data-stat-filter]').forEach(el => { el.value = ''; });
+        window.clearTimeout(statsTimer); resetStatsSearch(); loadStatsPeople();
+    }, { signal: sig });
     statsGrid?.addEventListener('scroll', () => {
         if (statsGrid.scrollHeight - statsGrid.scrollTop - statsGrid.clientHeight < 100) loadStatsPeople();
     }, { passive: true, signal: sig });
@@ -3629,6 +3645,15 @@ function familyTreeInitializer() {
         }
     }, { signal: sig });
 
+    // Detail presets: Basic shows non-contact details, All / None toggle every detail.
+    publicShareForm?.querySelector('.public_share_presets')?.addEventListener('click', (event) => {
+        const preset = event.target.closest('[data-public-share-preset]')?.dataset.publicSharePreset;
+        if (!preset) return;
+        publicShareForm.querySelectorAll('.public_share_chip input').forEach((input) => {
+            input.checked = preset === 'all' || (preset === 'basic' && !input.closest('.is_sensitive') && !['show_blood_group', 'show_religion'].includes(input.name));
+        });
+    }, { signal: sig });
+
     publicShareForm?.querySelector('[data-new-public-share]')?.addEventListener('click', async () => {
         resetPublicShareForm();
         setPublicShareStatus();
@@ -3661,6 +3686,7 @@ function familyTreeInitializer() {
         pickerMenu?.classList.remove('open');
         pickerToggle?.setAttribute('aria-expanded', 'false');
         closeTreeManageMenu();
+        closePartialMenu();
     }, { signal: sig });
 
     async function refreshPartialTreePicker(removeCurrent = false, treeId = '', partialId = '') {
@@ -3782,9 +3808,49 @@ function familyTreeInitializer() {
         load();
     }
 
+    // Partial Tree actions open as a dropdown under the row's button, styled like the tree manage menu.
+    let partialMenu = null;
+    function closePartialMenu() {
+        if (!partialMenu) return;
+        const { el, resolve } = partialMenu;
+        partialMenu = null;
+        el.remove();
+        resolve(null);
+    }
+    function partialMenuChoice(anchor, choices) {
+        const sameAnchor = partialMenu?.anchor === anchor;
+        closePartialMenu();
+        if (sameAnchor || !anchor) return Promise.resolve(null);
+        return new Promise(resolve => {
+            const el = document.createElement('div');
+            el.className = 'tree_manage_menu open';
+            el.setAttribute('role', 'menu');
+            // Reuse the tree manage menu's icons for the matching actions.
+            const iconOf = { visibility: 'public_share', reanchor: 'duplicate', restore: 'archive' };
+            const icon = value => treeManageMenu?.querySelector(`[data-tree-menu-action="${iconOf[value] || value}"] svg`)?.outerHTML || '';
+            el.innerHTML = choices.map(choice => `<button type="button" role="menuitem" data-menu-action="${escapeHTML(choice.value)}"${choice.value === 'delete' ? ' class="danger"' : ''}>${icon(choice.value)}<span>${escapeHTML(choice.label)}</span></button>`).join('');
+            (treeManageMenu?.parentNode || document.body).appendChild(el);
+            window.racinageEnhanceActionMenus?.(el);
+            const rect = anchor.getBoundingClientRect();
+            Object.assign(el.style, { position: 'fixed', zIndex: '10030' });
+            el.style.left = `${Math.max(8, Math.min(rect.right - el.offsetWidth, window.innerWidth - el.offsetWidth - 8))}px`;
+            el.style.top = `${Math.max(8, rect.bottom + 6 + el.offsetHeight > window.innerHeight - 8 ? rect.top - el.offsetHeight - 6 : rect.bottom + 6)}px`;
+            partialMenu = { el, anchor, resolve };
+            el.addEventListener('click', event => {
+                event.stopPropagation();
+                const item = event.target.closest('[data-menu-action]');
+                if (!item) return;
+                partialMenu = null;
+                el.remove();
+                resolve(item.dataset.menuAction);
+            });
+        });
+    }
+
     async function managePartialTree(row) {
+        const menuAnchor = row?.querySelector('[data-partial-tree-manage]');
         if (row?.dataset.partialTemp) {
-            const choice = await treeChoice(t('Manage Partial Tree'), [{value:'stats',label:t('Tree Stats')},{value:'important_dates',label:t('Important Dates')}], row.dataset.partialName || t('Partial Trees'));
+            const choice = await partialMenuChoice(menuAnchor, [{value:'stats',label:t('Tree Stats')},{value:'important_dates',label:t('Important Dates')}]);
             if (choice === 'stats') await showTreeInsights(row.dataset.treeLongId, '', row.dataset.partialTemp, row.querySelector('[data-partial-tree-manage]'));
             if (choice === 'important_dates') showTreeImportantDates(row.dataset.treeLongId, '', row.dataset.partialTemp, row.querySelector('[data-partial-tree-manage]'));
             return;
@@ -3810,7 +3876,7 @@ function familyTreeInitializer() {
         }
         if (canManage) choices.push({ value: 'delete', label: t('Delete Partial Tree') });
         if (!choices.length) return;
-        const selected = await treeChoice(t('Manage Partial Tree'), choices, row.dataset.partialName || t('Partial Trees'));
+        const selected = await partialMenuChoice(menuAnchor, choices);
         if (!selected) return;
         if (selected === 'stats') { await showTreeInsights(row.dataset.treeLongId, partialId, '', row.querySelector('[data-partial-tree-manage]')); return; }
         if (selected === 'important_dates') { showTreeImportantDates(row.dataset.treeLongId, partialId, '', row.querySelector('[data-partial-tree-manage]')); return; }
@@ -3940,7 +4006,36 @@ function familyTreeInitializer() {
     }, {signal: sig});
     sig.addEventListener('abort', () => { clearTimeout(pickerSearchTimer); pickerRequest?.abort(); }, {once: true});
 
+    pickerMenu?.addEventListener('submit', async (e) => {
+        const form = e.target.closest('#newFamilyTreeForm');
+        if (!form) return;
+        e.preventDefault();
+        const submit = form.querySelector('[type="submit"]');
+        const error = form.querySelector('[data-new-tree-error]');
+        const data = new FormData();
+        data.set('action', 'create_tree');
+        data.set('name', form.elements.name.value.trim() || t('New Family Tree'));
+        data.set('description', form.elements.description.value.trim());
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+            const payload = await postTreeAction(data);
+            form.reset();
+            form.hidden = true;
+            document.getElementById('newFamilyTreeBtn')?.setAttribute('aria-expanded', 'false');
+            pickerMenu?.classList.remove('open');
+            pickerToggle?.setAttribute('aria-expanded', 'false');
+            await selectTree(payload.tree_long_id, payload.focus_person_id || '');
+        } catch (err) {
+            error.textContent = err.message;
+        } finally {
+            submit.disabled = false;
+        }
+    }, { signal: sig });
+
     pickerMenu?.addEventListener('click', async (e) => {
+        // Import and export are opened by a document-level listener, so let those clicks through.
+        if (e.target.closest('[data-racinage-transfer-import], [data-racinage-transfer-export]')) return;
         e.stopPropagation();
 
         const pageButton = e.target.closest('[data-tree-picker-page-button]');
@@ -3962,13 +4057,17 @@ function familyTreeInitializer() {
 
         const partialManage = e.target.closest('[data-partial-tree-manage]');
         if (partialManage) {
+            closeTreeManageMenu();
             await managePartialTree(partialManage.closest('[data-partial-tree-row]'));
             return;
         }
 
         const moreBtn = e.target.closest('.family_tree_more_btn');
         if (moreBtn) {
-            openTreeManageMenu(moreBtn.closest('.family_tree_picker_row'), moreBtn);
+            closePartialMenu();
+            // A second click on the same button closes its menu.
+            if (treeManageMenu?.classList.contains('open') && activeManageTree?.trigger === moreBtn) closeTreeManageMenu();
+            else openTreeManageMenu(moreBtn.closest('.family_tree_picker_row'), moreBtn);
             return;
         }
 
@@ -3982,18 +4081,14 @@ function familyTreeInitializer() {
             return;
         }
 
-        if (e.target.closest('#newFamilyTreeBtn')) {
-            const name = await treePrompt(t('Name this family tree:'), t('New Family Tree'), t('New Family Tree'));
-            if (name === null) return;
-            const data = new FormData();
-            data.set('action', 'create_tree');
-            data.set('name', name.trim() || t('New Family Tree'));
-            try {
-                const payload = await postTreeAction(data);
-                await selectTree(payload.tree_long_id, payload.focus_person_id || '');
-            } catch (err) {
-                await treeAlert(err.message, t('Tree Action Failed'));
-            }
+        // New Family Tree opens a small form right under the button, like New Family on Manage.
+        const newTreeBtn = e.target.closest('#newFamilyTreeBtn');
+        if (newTreeBtn) {
+            const form = document.getElementById('newFamilyTreeForm');
+            if (!form) return;
+            form.hidden = !form.hidden;
+            newTreeBtn.setAttribute('aria-expanded', String(!form.hidden));
+            if (!form.hidden) form.elements.name.focus();
         }
     }, { signal: sig });
 
@@ -4234,6 +4329,7 @@ function familyTreeInitializer() {
     }
 
     treeManageMenu?.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-racinage-transfer-export]')) { closeTreeManageMenu(); return; }
         e.stopPropagation();
         const collectionAction = e.target.closest('[data-collection-assign]');
         if (collectionAction) {
@@ -4370,7 +4466,8 @@ function familyTreeInitializer() {
         if (e.target.closest('#addFirstMemberBtn, .empty_tree_add_first')) {
             e.preventDefault();
             e.stopPropagation();
-            openTreeModal('add_first_member');
+            // Starting a tree means adding someone new, so open on the New Person tab.
+            openTreeModal('add_first_member', { source: 'new' });
         }
     }, { signal: sig });
 
@@ -4887,6 +4984,36 @@ function familyTreeInitializer() {
         window.racinagePendingTreePrint = '';
         window.setTimeout(() => { if (isCurrentTreeView()) window.racinagePrintTree(); }, 0);
     }
+    // Stats bar extras: live zoom label, click to reset the view, and focus a person by id.
+    const updateZoomLabel = () => {
+        const label = document.querySelector('[data-tree-zoom-label]');
+        const treeCanvas = document.getElementById('treeCanvas');
+        if (!label || !treeCanvas) return;
+        // Read the target scale from the inline transform; the computed one lags during the zoom transition.
+        const inline = /scale\(([\d.]+)\)/.exec(treeCanvas.style.transform || '');
+        const scale = inline ? Number(inline[1]) : (new DOMMatrixReadOnly(getComputedStyle(treeCanvas).transform).a || 1);
+        label.textContent = `${Math.round(scale * 100)}%`;
+    };
+    // The canvas can be replaced when a tree loads, so watch the container for any canvas style change.
+    const zoomHost = document.getElementById('tree_container');
+    if (zoomHost) {
+        const zoomObserver = new MutationObserver((mutations) => {
+            if (mutations.some((mutation) => mutation.target.id === 'treeCanvas' || mutation.type === 'childList')) updateZoomLabel();
+        });
+        zoomObserver.observe(zoomHost, { subtree: true, attributes: true, attributeFilter: ['style'], childList: true });
+        sig.addEventListener('abort', () => zoomObserver.disconnect(), { once: true });
+    }
+    const statsBar = document.querySelector('.wrapper_stats');
+    if (statsBar) {
+        new MutationObserver(updateZoomLabel).observe(statsBar, { childList: true });
+        updateZoomLabel();
+    }
+    document.addEventListener('click', (event) => {
+        if (event.target.closest('[data-tree-zoom-reset]')) { window.racinageResetTreeView?.(); return; }
+        const focus = event.target.closest('[data-tree-focus-person]');
+        if (focus && isCurrentTreeView()) highlightFocusedPerson(focus.dataset.treeFocusPerson);
+    }, { signal: sig });
+
     window.racinageResetTreeView = async function () {
         if (!document.querySelector('.tree_container')) return;
         await resetTreeView();

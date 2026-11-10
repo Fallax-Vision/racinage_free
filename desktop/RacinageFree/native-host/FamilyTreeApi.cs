@@ -431,7 +431,48 @@ namespace RacinageFreeDesktop {
         if (html.Length > 0) html.Append("<span>•</span>");
         html.Append("<button type='button' class='one_value_stats' data-tree-stat='" + StatCategories[i] + "' aria-haspopup='dialog'><span class='wrapper_one_value_stats display_grid auto2 gap05'><span class='title'>" + TreeText.H(labels[i]) + ":</span><span class='value'>" + N(people.Count(p => InCategory(p, StatCategories[i], spouses))) + "</span></span></button>");
       }
-      return html.ToString();
+      return html.ToString() + StatsExtrasHtml(people);
+    }
+
+    // Right end of the stats bar: living count with the oldest living person, the next birthday and the zoom level.
+    // Port of hosted racinage_tree_stats_extras_html; Free has no Events module, so there is no "Next event" chip.
+    private static string StatsExtrasHtml(List<Dictionary<string, string> > people) {
+      DateTime today = DateTime.Now.Date;
+      Dictionary<string, string> oldest = null, nextBirthday = null;
+      int oldestAge = -1, nextDays = int.MaxValue, nextAge = 0;
+      foreach (Dictionary<string, string> p in people) {
+        if (Deceased(p) || (Q(p, "visibility") != "" && Q(p, "visibility") != "visible")) continue;
+        DateTime birth;
+        if (!DateTime.TryParseExact(CleanDate(Q(p, "birth_date")) ?? "", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out birth) || birth > today) continue;
+        int age = today.Year - birth.Year - (today.Month < birth.Month || (today.Month == birth.Month && today.Day < birth.Day) ? 1 : 0);
+        if (age > 125) continue;
+        if (age > oldestAge) { oldestAge = age; oldest = p; }
+        // Feb 29 birthdays fall on Mar 1 in other years.
+        DateTime next = birth.Month == 2 && birth.Day == 29 && !DateTime.IsLeapYear(today.Year) ? new DateTime(today.Year, 3, 1) : new DateTime(today.Year, birth.Month, birth.Day);
+        if (next < today) next = birth.Month == 2 && birth.Day == 29 && !DateTime.IsLeapYear(today.Year + 1) ? new DateTime(today.Year + 1, 3, 1) : new DateTime(today.Year + 1, birth.Month, birth.Day);
+        int days = (int)(next - today).TotalDays;
+        if (days < nextDays) { nextDays = days; nextBirthday = p; nextAge = next.Year - birth.Year; }
+      }
+      Func<Dictionary<string, string>, string> name = p => (Q(p, "first_name") + " " + Q(p, "last_name")).Trim();
+      Func<int, string> when = days => days == 0 ? TreeText.T("today") : days == 1 ? TreeText.T("tomorrow") : TreeText.T("in %d days").Replace("%d", N(days));
+      Func<string, string, string, string> chip = (inner, attrs, title) => "<button type='button' class='stats_extra'" + attrs + " title='" + TreeText.H(title) + "'>" + inner + "</button>";
+      List<string> parts = new List<string>();
+      string living = "<span class='title'>" + TreeText.H("Living") + ":</span><span class='value'>" + N(people.Count(p => !Deceased(p))) + "</span>";
+      if (oldest != null) {
+        string label = Placeholders(TreeText.T("Oldest: %s, %d"), name(oldest), N(oldestAge));
+        parts.Add(chip(living + "<span class='stats_extra_note'>" + TreeText.H(label) + "</span>", " data-tree-focus-person='" + QI(oldest, "id") + "'", label));
+      } else parts.Add("<span class='stats_extra'>" + living + "</span>");
+      if (nextBirthday != null) {
+        string title = Placeholders(TreeText.T("%s turns %d %s"), name(nextBirthday), N(nextAge), when(nextDays));
+        parts.Add(chip("<span class='title'>" + TreeText.H("Next birthday") + ":</span><span class='value'>" + TreeText.H(name(nextBirthday)) + "</span><span class='stats_extra_note'>" + TreeText.H(when(nextDays)) + "</span>", " data-tree-focus-person='" + QI(nextBirthday, "id") + "'", title));
+      }
+      parts.Add(chip("<span class='title'>" + TreeText.H("Zoom") + ":</span><span class='value' data-tree-zoom-label>100%</span>", " data-tree-zoom-reset", TreeText.T("Reset View")));
+      return "<span class='stats_extras'>" + String.Join("<span>•</span>", parts) + "</span>";
+    }
+    // Fills %s / %d placeholders in order, like PHP sprintf, so translated word order is kept.
+    private static string Placeholders(string template, params string[] values) {
+      int index = 0;
+      return System.Text.RegularExpressions.Regex.Replace(template, "%[sd]", m => index < values.Length ? values[index++] : m.Value);
     }
 
     private Dictionary<string, object> Success(SqliteDb db, string message, string treeLongId, int focus, bool profileUpdate, TreeRequest r) {
@@ -1132,8 +1173,9 @@ namespace RacinageFreeDesktop {
       if (!StatCategories.Contains(category)) throw Fail("Invalid request. Please refresh and try again.", 400);
       HashSet<int> spouses = SpouseTargets(db, treeId);
       string search = r["search"].Trim().ToLowerInvariant(), life = r["life"], marital = r["marital"], gender = r["gender"], age = r["age"];
+      List<Dictionary<string, string> > scope = ScopePeople(db, treeId, ids);
       int offset = Math.Max(0, Math.Min(1000000, r.Int("offset")));
-      IEnumerable<Dictionary<string, string> > people = ScopePeople(db, treeId, ids).Where(p => InCategory(p, category, spouses));
+      IEnumerable<Dictionary<string, string> > people = scope.Where(p => InCategory(p, category, spouses));
       if (life == "alive") people = people.Where(p => !Deceased(p)); else if (life == "deceased") people = people.Where(Deceased);
       if (new[] { "single", "married", "divorced", "widowed" }.Contains(marital)) people = people.Where(p => Q(p, "marital_status") == marital);
       if (gender == "M" || gender == "F") people = people.Where(p => Q(p, "gender") == gender);
@@ -1145,10 +1187,48 @@ namespace RacinageFreeDesktop {
           case "unknown": return CleanDate(Q(p, "birth_date")) == null; default: return true;
         }
       });
+      people = ExtraFilters(db, treeId, people, r);
       if (search != "") people = people.Where(p => (Q(p, "first_name") + " " + Q(p, "last_name")).ToLowerInvariant().Contains(search));
       List<Dictionary<string, string> > page = people.Skip(offset).Take(13).ToList();
       List<Dictionary<string, object> > rows = page.Take(12).Select(p => new Dictionary<string, object> { { "id", QI(p, "id") }, { "name", (Q(p, "first_name") + " " + Q(p, "last_name")).Trim() }, { "gender", Q(p, "gender") }, { "is_deceased", Deceased(p) }, { "image_sm_url", PersonImageUrl(Q(p, "image_name"), Q(p, "gender"), "sm") } }).ToList();
-      return Ok("Available people loaded.", new Dictionary<string, object> { { "people", rows }, { "has_more", page.Count > 12 }, { "next_offset", offset + rows.Count } });
+      Dictionary<string, object> result = new Dictionary<string, object> { { "people", rows }, { "has_more", page.Count > 12 }, { "next_offset", offset + rows.Count } };
+      // Dropdown values present in this tree, sent with the first page only (port of racinage_person_filter_options).
+      if (offset == 0) result["filter_options"] = TextFilters.ToDictionary(field => field, field => (object)scope.Select(p => Q(p, field).Trim()).Where(v => v != "").Distinct(StringComparer.Ordinal).OrderBy(v => v, StringComparer.CurrentCultureIgnoreCase).Take(200).ToList());
+      return Ok("Available people loaded.", result);
+    }
+
+    private static readonly string[] TextFilters = { "religion", "nationality", "birth_place", "blood_group", "education_level" };
+    // Port of hosted racinage_person_extra_filters (Free has no accounts, so there is no "Added by" filter).
+    private static IEnumerable<Dictionary<string, string> > ExtraFilters(SqliteDb db, int treeId, IEnumerable<Dictionary<string, string> > people, TreeRequest r) {
+      int minimum, maximum, month;
+      if (int.TryParse(r["age_min"].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out minimum)) { minimum = Math.Min(150, minimum); people = people.Where(p => AgeYears(p) >= minimum); }
+      if (int.TryParse(r["age_max"].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out maximum)) { maximum = Math.Min(150, maximum); people = people.Where(p => AgeYears(p) <= maximum); }
+      if (r["age"] == "unknown") people = people.Where(p => CleanDate(Q(p, "birth_date")) == null);
+      if (int.TryParse(r["birth_month"], NumberStyles.None, CultureInfo.InvariantCulture, out month) && month >= 1 && month <= 12) {
+        string mm = month.ToString("00", CultureInfo.InvariantCulture);
+        people = people.Where(p => { string d = CleanDate(Q(p, "birth_date")); return d != null && d.Length >= 7 && d.Substring(5, 2) == mm; });
+      }
+      Func<string, Func<Dictionary<string, string>, bool>, IEnumerable<Dictionary<string, string> > > yesNo = (key, has) =>
+        r[key] == "yes" ? people.Where(has) : r[key] == "no" ? people.Where(p => !has(p)) : people;
+      people = yesNo("photo", p => Q(p, "image_name") != "");
+      people = yesNo("contact", p => Q(p, "phone1") != "" || Q(p, "phone2") != "" || Q(p, "email1") != "" || Q(p, "email2") != "");
+      if (r["gallery"] == "yes" || r["gallery"] == "no") {
+        HashSet<string> withMedia = new HashSet<string>(db.Query("SELECT DISTINCT person_id FROM person_gallery_media WHERE status='active'").Select(row => Q(row, "person_id")));
+        people = yesNo("gallery", p => withMedia.Contains(Q(p, "id")));
+      }
+      // "Child of the family" has parents in this tree; "married into the family" has none.
+      if (r["sibling"] == "yes" || r["sibling"] == "no") {
+        HashSet<string> children = new HashSet<string>(db.Query("SELECT DISTINCT child_id FROM parent_child WHERE family_tree_id=?", treeId).Select(row => Q(row, "child_id")));
+        people = yesNo("sibling", p => children.Contains(Q(p, "id")));
+      }
+      string visibility = r["visibility"];
+      if (visibility == "visible" || visibility == "hidden") people = people.Where(p => (Q(p, "visibility") == "" ? "visible" : Q(p, "visibility")) == visibility);
+      foreach (string field in TextFilters) {
+        string value = r[field].Trim();
+        if (value.Length > 191) value = value.Substring(0, 191);
+        if (value != "") { string match = value; people = people.Where(p => Q(p, field).Trim() == match); }
+      }
+      return people;
     }
 
     private const string PersonIcon = "<svg class='svg-icon' viewBox='0 0 20 20'><path d=\"M10,10.9c2.373,0,4.303-1.932,4.303-4.306c0-2.372-1.93-4.302-4.303-4.302S5.696,4.223,5.696,6.594C5.696,8.969,7.627,10.9,10,10.9z M10,3.331c1.801,0,3.266,1.463,3.266,3.263c0,1.802-1.465,3.267-3.266,3.267c-1.8,0-3.265-1.465-3.265-3.267C6.735,4.794,8.2,3.331,10,3.331z\"></path><path d=\"M10,12.503c-4.418,0-7.878,2.058-7.878,4.685c0,0.288,0.231,0.52,0.52,0.52c0.287,0,0.519-0.231,0.519-0.52c0-1.976,3.132-3.646,6.84-3.646c3.707,0,6.838,1.671,6.838,3.646c0,0.288,0.234,0.52,0.521,0.52s0.52-0.231,0.52-0.52C17.879,14.561,14.418,12.503,10,12.503z\"></path></svg>";

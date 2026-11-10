@@ -191,6 +191,11 @@ namespace RacinageFreeDesktop {
       Ok(Act("tree_important_dates"), "tree_important_dates");
       result = Act("list_stat_persons", "category", "men");
       Check(Ok(result, "list_stat_persons") && Json.Serialize(result["people"]).Contains("Adam Root"), "stat person list");
+      Check(result.ContainsKey("filter_options") && Json.Serialize(result["filter_options"]).Contains("religion"), "stat filter options on the first page");
+      result = Act("list_stat_persons", "category", "total", "sibling", "no", "age_min", "0", "age_max", "150", "photo", "no", "contact", "no", "gallery", "no", "visibility", "visible", "birth_month", "1");
+      Check(Ok(result, "list_stat_persons extra filters") && !result.ContainsKey("error"), "stat extra filters accepted");
+      result = Post("/includes/tree_save.include.php", new Dictionary<string, string> { { "action", "get_tree_state" }, { "tree_long_id", treeId } });
+      Check(Ok(result, "stats bar") && ((string)result["stats_html"]).Contains("stats_extras") && ((string)result["stats_html"]).Contains("data-tree-zoom-label"), "stats bar extras");
       result = Act("partial_package", "relationship_id", mainUnion.ToString(), "photos", "1", "gallery", "1");
       Ok(result, "partial_package");
       string package = (string)result["package"];

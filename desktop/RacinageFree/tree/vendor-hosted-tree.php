@@ -97,7 +97,8 @@ function tree_css_purge(string $css, array $known, array &$keyframes): string {
         } elseif (preg_match('/^@(-webkit-)?keyframes\s+([\w-]+)/i', $prelude, $match)) {
             $keyframes[$match[2]] = "$prelude{" . tree_css_min($body) . '}';
         } elseif ($prelude !== '' && $prelude[0] !== '@') {
-            $selectors = array_filter(array_map('trim', explode(',', $prelude)), fn($s) => tree_css_keep_selector($s, $known));
+            // Split on top-level commas only, so lists inside :is(), :not() and :has() stay intact.
+            $selectors = array_filter(array_map('trim', preg_split('/,(?![^()]*\))/', $prelude)), fn($s) => tree_css_keep_selector($s, $known));
             if ($selectors) $out .= implode(',', $selectors) . '{' . tree_css_min($body) . '}';
         }
     }

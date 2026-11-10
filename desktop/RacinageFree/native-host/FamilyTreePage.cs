@@ -54,16 +54,32 @@ namespace RacinageFreeDesktop {
         string treeName = Q(tree, "name");
         string partialLabel = temporary ? TreeText.T("Temporary") : TreeText.T("Permanent");
         string view = Q(db.QueryOne("SELECT setting_value FROM local_plugin_settings WHERE slug='core-tree' AND setting_key='view'"), "setting_value") == "vertical" ? "vertical" : "horizontal";
+        // Same structure as the hosted stats modal: labelled filters, an age range, More filters and Reset.
         StringBuilder filters = new StringBuilder();
-        foreach (var filter in new[] {
-          Tuple.Create("life", "Life status", new[] { "", "All statuses", "alive", "Alive", "deceased", "Deceased" }),
-          Tuple.Create("marital", "Marital status", new[] { "", "Any marital status", "single", "Single", "married", "Married", "divorced", "Divorced", "widowed", "Widowed" }),
-          Tuple.Create("age", "Age", new[] { "", "All ages", "under5", "Under 5", "5to9", "5-9 years", "10to17", "10-17 years", "18to29", "18-29 years", "30to49", "30-49 years", "50plus", "50+ years", "unknown", "Unknown age" }),
-          Tuple.Create("gender", "Gender", new[] { "", "All genders", "M", "Male", "F", "Female" }) }) {
-          filters.Append("<select data-stat-filter=\"" + filter.Item1 + "\" aria-label=\"" + TreeText.H(filter.Item2) + "\">");
-          for (int i = 0; i < filter.Item3.Length; i += 2) filters.Append("<option value=\"" + filter.Item3[i] + "\">" + TreeText.H(filter.Item3[i + 1]) + "</option>");
-          filters.Append("</select>");
-        }
+        Action<string, string, string[], bool> statSelect = (filter, label, options, dynamic) => {
+          filters.Append("<label class=\"tree_stats_filter\"><span>" + TreeText.H(label) + "</span><select data-stat-filter=\"" + filter + "\"" + (dynamic ? " data-stat-options=\"" + filter + "\"" : "") + ">");
+          for (int i = 0; i < options.Length; i += 2) filters.Append("<option value=\"" + options[i] + "\">" + TreeText.H(options[i + 1]) + "</option>");
+          filters.Append("</select></label>");
+        };
+        statSelect("life", "Life status", new[] { "", "All statuses", "alive", "Alive", "deceased", "Deceased" }, false);
+        statSelect("gender", "Gender", new[] { "", "All genders", "M", "Male", "F", "Female" }, false);
+        statSelect("marital", "Marital status", new[] { "", "Any marital status", "single", "Single", "married", "Married", "divorced", "Divorced", "widowed", "Widowed" }, false);
+        statSelect("sibling", "Family role", new[] { "", "Everyone", "yes", "Child of the family", "no", "Married into the family" }, false);
+        filters.Append("<fieldset class=\"tree_stats_filter tree_stats_age\"><legend>" + TreeText.H("Age range") + "</legend>"
+          + "<input type=\"number\" min=\"0\" max=\"150\" inputmode=\"numeric\" data-stat-filter=\"age_min\" placeholder=\"" + TreeText.H("From") + "\" aria-label=\"" + TreeText.H("Minimum age") + "\">"
+          + "<span aria-hidden=\"true\">-</span>"
+          + "<input type=\"number\" min=\"0\" max=\"150\" inputmode=\"numeric\" data-stat-filter=\"age_max\" placeholder=\"" + TreeText.H("To") + "\" aria-label=\"" + TreeText.H("Maximum age") + "\"></fieldset>");
+        filters.Append("<details class=\"tree_stats_more\"><summary>" + TreeText.H("More filters") + "</summary><div class=\"tree_stats_more_grid\">");
+        statSelect("photo", "Profile photo", new[] { "", "Any", "yes", "With a photo", "no", "Without a photo" }, false);
+        statSelect("gallery", "Gallery media", new[] { "", "Any", "yes", "Has media", "no", "No media" }, false);
+        statSelect("contact", "Contact details", new[] { "", "Any", "yes", "Has phone or email", "no", "No phone or email" }, false);
+        statSelect("visibility", "Visibility", new[] { "", "Any", "visible", "Visible", "hidden", "Hidden" }, false);
+        List<string> months = new List<string> { "", "Any month" };
+        for (int m = 1; m <= 12; m++) { months.Add(m.ToString(CultureInfo.InvariantCulture)); months.Add(CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(m)); }
+        statSelect("birth_month", "Birth month", months.ToArray(), false);
+        foreach (string[] text in new[] { new[] { "religion", "Religion" }, new[] { "nationality", "Nationality" }, new[] { "birth_place", "Birth place" }, new[] { "blood_group", "Blood group" }, new[] { "education_level", "Education" } })
+          statSelect(text[0], text[1], new[] { "", "Any" }, true);
+        filters.Append("</div></details><button type=\"button\" class=\"tree_secondary_action tree_stats_reset\" data-stats-reset>" + TreeText.H("Reset filters") + "</button>");
         Dictionary<string, string> values = new Dictionary<string, string> {
           { "i18n_json", i18n }, { "crop_json", i18n }, { "gallery_i18n", E(serializer.Serialize(TreeText.All)) },
           { "vertical_class", view == "vertical" ? " vertical" : "" }, { "view", view }, { "view_label", TreeText.H(view == "vertical" ? "Vertical" : "Horizontal") },

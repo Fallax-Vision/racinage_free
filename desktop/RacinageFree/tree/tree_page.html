@@ -49,9 +49,17 @@
           <svg class="family_tree_picker_new_icon" viewBox="0 0 20 20"><path d="M10,10.9c2.373,0,4.303-1.932,4.303-4.306c0-2.372-1.93-4.302-4.303-4.302S5.696,4.223,5.696,6.594C5.696,8.969,7.627,10.9,10,10.9z M10,3.331c1.801,0,3.266,1.463,3.266,3.263c0,1.802-1.465,3.267-3.266,3.267c-1.8,0-3.265-1.465-3.265-3.267C6.735,4.794,8.2,3.331,10,3.331z"></path><path d="M10,12.503c-4.418,0-7.878,2.058-7.878,4.685c0,0.288,0.231,0.52,0.52,0.52c0.287,0,0.519-0.231,0.519-0.52c0-1.976,3.132-3.646,6.84-3.646c3.707,0,6.838,1.671,6.838,3.646c0,0.288,0.234,0.52,0.521,0.52s0.52-0.231,0.52-0.52C17.879,14.561,14.418,12.503,10,12.503z"></path></svg>
           {{t:Manage Persons}}
         </a>
-        <button type="button" class="family_tree_picker_new" id="newFamilyTreeBtn" data-racinage-create-resource="trees">
+        <button type="button" class="family_tree_picker_new" id="newFamilyTreeBtn" aria-expanded="false" aria-controls="newFamilyTreeForm">
           <span>+</span> {{t:New Family Tree}}
         </button>
+        <form class="tree_new_popover" id="newFamilyTreeForm" hidden hx-boost="false">
+          <label for="newFamilyTreeName">{{t:Tree name}}</label>
+          <input class="form_input" id="newFamilyTreeName" name="name" type="text" maxlength="120" required placeholder="{{t:e.g. Mbeki family tree}}">
+          <label for="newFamilyTreeDescription">{{t:Description}} <small>{{t:Optional}}</small></label>
+          <textarea class="form_input" id="newFamilyTreeDescription" name="description" rows="2" maxlength="2000" placeholder="{{t:Which branch or side of the family is this?}}"></textarea>
+          <p class="tree_new_popover_error" data-new-tree-error role="alert"></p>
+          <button class="tree_primary_action" type="submit">{{t:Create tree}}</button>
+        </form>
       </div>
     </div>
     <div class="tree_manage_menu" id="treeManageMenu" aria-hidden="true">
@@ -303,8 +311,8 @@
           <small id="treeStatsStatus" role="status"></small>
           <button type="button" class="tree_modal_close" data-stats-close aria-label="{{t:Close}}">×</button>
         </div>
-        <label class="tree_stats_search">{{t:Search people}}<input type="search" id="treeStatsSearch" autocomplete="off" placeholder="{{t:Search by name}}"></label>
         <div class="tree_stats_filters" data-stats-filters>{{stats_filters}}</div>
+        <label class="tree_stats_search">{{t:Search people}}<input type="search" id="treeStatsSearch" autocomplete="off" placeholder="{{t:Search by name}}"></label>
         <div class="tree_existing_person_grid" id="treeStatsGrid" aria-busy="false"></div>
         <button type="button" class="button1 secondary" id="treeStatsRetry" hidden>{{t:Retry}}</button>
       </section>
